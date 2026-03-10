@@ -1,0 +1,9 @@
+[package]
+name = "arc-challenge-engine"
+description = "Challenge lifecycle, resolution rules, and remedies for AutoResearch Chain."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arc-protocol-types = { workspace = true }

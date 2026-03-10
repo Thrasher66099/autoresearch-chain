@@ -1,0 +1,9 @@
+[package]
+name = "arc-storage-model"
+description = "Artifact references, content-addressed metadata, and materialized state storage for AutoResearch Chain."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arc-protocol-types = { workspace = true }

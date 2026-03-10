@@ -101,6 +101,7 @@ No code from `autoresearch` is currently included in this repository. See [THIRD
 | Stage 3 swarm training protocol | Not yet specified |
 | Gradient attestation system | Not yet specified |
 | Long-horizon compute accounting | Not yet specified |
+| Implementation direction chosen | Yes — Rust-native custom chain ([plan](docs/implementation-plan.md)) |
 | Reference implementation | Not yet started |
 
 ## Documentation
@@ -114,8 +115,23 @@ No code from `autoresearch` is currently included in this repository. See [THIRD
 | [Project Scope](docs/project-scope.md) | Current vs. future scope |
 | [Future: Stage 3 Training](docs/future-stage-3-training.md) | Decentralized training layer (future work) |
 | [Genesis and Track Initialization](docs/genesis-and-track-initialization.md) | How new research tracks are created |
+| [Implementation Plan](docs/implementation-plan.md) | Architecture direction and build phases |
+| [Roadmap](docs/roadmap.md) | Staged development plan |
 | [Terminology](docs/terminology.md) | Glossary of protocol terms |
 | [Licensing](docs/licensing.md) | Split-license model explained |
+
+## Planned Code Architecture
+
+The implementation follows a four-layer split. See [Implementation Plan](docs/implementation-plan.md) for full detail.
+
+| Layer | Language | Role |
+|-------|----------|------|
+| Protocol Core | Rust | Deterministic state machine: types, transitions, domains, forks, challenges, rewards |
+| Research Runners | Python | Off-chain useful-work execution: proposers, validators, challengers, autoresearch adapters |
+| Artifact / DA Layer | TBD | Content-addressed storage for diffs, evidence bundles, materialized snapshots |
+| Operator Interfaces | TBD | CLI, explorer, developer APIs (deferred until protocol core is validated) |
+
+No implementation code exists yet. The current repository contains protocol specification, design rationale, and project infrastructure.
 
 ## Repository Structure
 
@@ -128,16 +144,26 @@ NOTICE                             Attribution and provenance
 THIRD_PARTY_NOTICES.md             Third-party dependencies
 CONTRIBUTING.md                    Contribution guide
 .gitignore                         Git ignore rules
-docs/
+
+docs/                              Protocol and project documentation
   README.md                        Docs index
+  implementation-plan.md           Architecture direction and build phases
   executive-summary.md             Short project overview
   whitepaper.md                    Full white paper
   protocol-v0.2.md                 Technical protocol spec
   project-scope.md                 Scope and staging
+  roadmap.md                       Staged development plan
   future-stage-3-training.md       Stage 3 future work
   genesis-and-track-initialization.md  Genesis blocks and track creation
   licensing.md                     Licensing explanation
   terminology.md                   Glossary
+
+crates/                            (Planned) Rust protocol core — not yet implemented
+python/                            (Planned) Python research runners — not yet implemented
+spec/                              (Planned) Normative protocol documents
+fixtures/                          (Planned) Test domains, example genesis blocks
+simulations/                       (Planned) Adversarial and economic test scenarios
+
 templates/
   code-file-header.txt             AGPL header for source files
   documentation-file-header.txt    CC BY-SA header for docs

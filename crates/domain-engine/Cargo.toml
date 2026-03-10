@@ -1,0 +1,9 @@
+[package]
+name = "arc-domain-engine"
+description = "Domain lifecycle, research track standards, genesis activation, and track tree management for AutoResearch Chain."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arc-protocol-types = { workspace = true }

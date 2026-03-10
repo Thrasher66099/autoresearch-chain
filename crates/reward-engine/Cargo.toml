@@ -1,0 +1,9 @@
+[package]
+name = "arc-reward-engine"
+description = "Staged rewards, escrow, slashing, and domain-local accounting for AutoResearch Chain."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arc-protocol-types = { workspace = true }

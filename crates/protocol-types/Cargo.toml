@@ -1,0 +1,10 @@
+[package]
+name = "arc-protocol-types"
+description = "Core protocol types for AutoResearch Chain: identifiers, blocks, domains, tracks, forks, challenges, rewards, and state references."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# No dependencies yet. This is the foundational crate.
+# Likely early additions: serde (canonical serialization), sha2 or blake3 (hashing).

@@ -1,0 +1,15 @@
+[package]
+name = "arc-simulator"
+description = "Local protocol simulator and scenario engine for AutoResearch Chain. The primary Phase 0 target."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arc-protocol-types = { workspace = true }
+arc-protocol-rules = { workspace = true }
+arc-domain-engine = { workspace = true }
+arc-fork-engine = { workspace = true }
+arc-challenge-engine = { workspace = true }
+arc-reward-engine = { workspace = true }
+arc-storage-model = { workspace = true }

@@ -1,0 +1,9 @@
+[package]
+name = "arc-fork-engine"
+description = "Fork families, dominance evaluation, and frontier selection for AutoResearch Chain."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arc-protocol-types = { workspace = true }

@@ -189,6 +189,7 @@ The strongest near-term goals are:
 5. specify scale validation incentives
 6. make user workflows legible
 7. begin mapping the eventual Stage 3 design space
+8. execute the initial implementation plan: Rust protocol types, local simulator, Python runner integration (see [Implementation Plan](implementation-plan.md))
 
 ---
 
