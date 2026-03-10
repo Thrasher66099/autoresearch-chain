@@ -35,6 +35,31 @@ This is a design-stage specification. No reference implementation exists yet.
   - [Domain Reward Separation](#domain-reward-separation)
   - [Upstream Integration Rule](#upstream-integration-rule)
   - [Required Protocol Guarantees](#required-protocol-guarantees)
+- [Research Track Standards, Genesis Blocks, and Domain Initialization](#research-track-standards-genesis-blocks-and-domain-initialization)
+  - [ResearchTrackStandard](#researchtrackstandard)
+  - [RTS-1](#rts-1)
+  - [Future RTS Classes](#future-rts-classes)
+  - [GenesisBlock](#genesisblock)
+  - [Research Target Declaration](#research-target-declaration)
+  - [Domain Intent](#domain-intent)
+  - [TrackInitialization](#trackinitialization)
+  - [Genesis Activation Conditions](#genesis-activation-conditions)
+  - [Failed Genesis Proposals](#failed-genesis-proposals)
+  - [TrackTree](#tracktree)
+  - [Domain-Scoped Validator Pools](#domain-scoped-validator-pools)
+  - [Domain-Scoped Reward Context](#domain-scoped-reward-context)
+  - [Cross-Track Synthesis](#cross-track-synthesis)
+  - [Metric Integrity](#metric-integrity)
+  - [Frozen Surface and Search Surface](#frozen-surface-and-search-surface)
+  - [Metric Adequacy Challenges](#metric-adequacy-challenges)
+  - [Metric Migration and Successor Tracks](#metric-migration-and-successor-tracks)
+  - [Dataset Integrity](#dataset-integrity)
+  - [Dataset Splits](#dataset-splits)
+  - [Dataset Licensing](#dataset-licensing)
+  - [Evaluation Harness Immutability](#evaluation-harness-immutability)
+  - [Genesis as the Root of Domain Instantiation](#genesis-as-the-root-of-domain-instantiation)
+  - [Relationship to ProblemDomain and DomainSpec](#relationship-to-problemdomain-and-domainspec)
+  - [Required Protocol Guarantees (Genesis)](#required-protocol-guarantees-genesis)
 
 ---
 
@@ -57,6 +82,9 @@ Tracks:
 - slashing,
 - governance parameters,
 - problem domain registrations and domain specs,
+- research track standard declarations,
+- genesis block records and activation state,
+- track tree topology,
 - canonical frontier state references,
 - materialized state records.
 
@@ -685,6 +713,493 @@ If the protocol is to become a real market for useful AI research work, it must 
 At the same time, it preserves a simple invariant for users: for any domain, there is always a current best protocol-recognized codebase that can be pulled, inspected, and improved.
 
 This turns the chain from a passive ledger of patches into a living public substrate for autonomous research.
+
+---
+
+## Research Track Standards, Genesis Blocks, and Domain Initialization
+
+### Purpose
+
+AutoResearch Chain must support not only post-genesis research competition, but also the creation of new research arenas.
+
+The protocol already specifies how participants submit blocks, validate blocks, challenge claims, compete across forks, and converge on stronger frontier states. But a full decentralized research market also requires answers to:
+
+- How does a new research arena begin?
+- What defines the initial baseline?
+- What metric is being optimized?
+- Which files may the agent modify and which are frozen?
+- What dataset is canonical?
+- What hardware class and time budget define reproducibility?
+- What is the first parent state that all later descendants build from?
+
+This section defines the missing bootstrapping layer.
+
+The protocol introduces the following objects:
+
+- `ResearchTrackStandard`
+- `GenesisBlock`
+- `TrackInitialization`
+- `TrackTree`
+- `MetricIntegrityPolicy`
+- `DatasetIntegrityPolicy`
+
+These objects formalize how new research domains are created, activated, and rooted.
+
+**Status note:** Research track standards and genesis block mechanics are specified at the protocol level. They are not yet implemented in any reference client. The object definitions and guarantees below are part of the protocol specification, not claims about existing software.
+
+---
+
+### ResearchTrackStandard
+
+A `ResearchTrackStandard` (`RTS`) is an interface specification that defines the minimum shape a research track must satisfy in order to participate in the protocol.
+
+The protocol does not hardcode one benchmark, one metric, or one model family. Instead, it enforces that any research track exposes all required components in a standardized form.
+
+The standard defines the structure of the game. The market determines whether the game is worth playing.
+
+A standard does not define the substance of the research problem. It defines the protocol-visible structure required for decentralized validation, challenge, and reward settlement.
+
+---
+
+### RTS-1
+
+`RTS-1` is the first research track standard: a single-metric fixed-budget research standard.
+
+`RTS-1` is intended for:
+
+- single-metric optimization
+- fixed wall-clock or fixed-budget experiments
+- bounded single-node or single-GPU replay
+- autonomous research-agent loops similar to `autoresearch`
+- Stage 1 research-discovery markets
+
+A conformant `RTS-1` track must declare at minimum:
+
+| Field | Description |
+|-------|-------------|
+| `rts_version` | Standard version identifier |
+| `research_target_declaration` | Human-readable declaration of the research target |
+| `domain_intent` | Intended class of value the domain seeks to produce |
+| `metric_id` | Identifier for the evaluation metric |
+| `metric_direction` | Whether higher or lower is better |
+| `evaluation_harness_ref` | Reference to the frozen evaluation harness |
+| `evaluate(recipe, dataset) -> score` | Evaluation semantics in protocol-declared form |
+| `dataset_hash` | Content-addressed canonical dataset identity |
+| `dataset_splits` | Declaration of train, validation, and test partitions |
+| `search_surface` | Files or modules that participants may modify |
+| `frozen_surface` | Files or modules that must remain fixed |
+| `time_budget` | Wall-clock or compute budget for a single evaluation |
+| `hardware_class` | Hardware requirements for reproducible replay |
+| `seed_recipe` | Initial baseline recipe |
+| `seed_score` | Baseline score of the seed recipe |
+| `seed_environment_manifest` | Environment specification for the seed |
+| `artifact_schema` | Schema for required submission artifacts |
+| `license_declaration` | License status of dataset and required external assets |
+
+The protocol does not need to understand what the metric means semantically. It only needs to verify that the track declares and provides all required components in a reproducible and challengeable form.
+
+---
+
+### Future RTS Classes
+
+The protocol supports future standards without rewriting the core chain logic.
+
+Examples may include:
+
+- `RTS-2`: Multi-metric tracks requiring Pareto dominance or weighted multi-objective improvement
+- `RTS-3`: Efficiency-normalized tracks where reward depends on score relative to compute expenditure
+- `RTS-4`: Multi-GPU or distributed replay tracks for larger-scale evaluation
+- `RTS-5`: Longer-horizon or curriculum-based tracks with staged evaluation budgets
+
+New standards are additive and versioned. They do not require redefining the core block, challenge, and reward logic of the chain.
+
+---
+
+### GenesisBlock
+
+A `GenesisBlock` is the root block of a new research track.
+
+Unlike ordinary blocks, a genesis block is not a claim that a child recipe improves on a parent recipe. It is a claim that a new research arena is sufficiently well-defined to be instantiated as a protocol-recognized market.
+
+A genesis block establishes the rules of the game for all descendant blocks in that research track.
+
+A `GenesisBlock` includes at minimum:
+
+| Field | Description |
+|-------|-------------|
+| `genesis_block_id` | Unique identifier for the genesis block |
+| `rts_version` | Research track standard this genesis conforms to |
+| `domain_id` | Unique domain identifier for the new track |
+| `research_target_declaration` | Human-readable research target |
+| `domain_intent` | Intended optimization scope |
+| `seed_recipe_ref` | Reference to the initial baseline recipe |
+| `seed_codebase_state_ref` | Reference to the initial codebase state |
+| `frozen_surface` | Files or modules that must remain fixed |
+| `search_surface` | Files or modules that may be modified |
+| `canonical_dataset_ref` | Reference to the canonical dataset |
+| `dataset_hash` | Content-addressed dataset identity |
+| `dataset_splits` | Declared data partitions |
+| `evaluation_harness_ref` | Reference to the evaluation harness |
+| `metric_id` | Evaluation metric identifier |
+| `metric_direction` | Whether higher or lower is better |
+| `hardware_class` | Hardware requirements for replay |
+| `time_budget` | Evaluation time or compute budget |
+| `seed_environment_manifest` | Environment specification |
+| `seed_score` | Baseline score of the seed recipe |
+| `artifact_schema` | Schema for required submission artifacts |
+| `seed_bond` | Economic bond posted by the genesis proposer |
+| `license_declaration` | License status of dataset and external assets |
+| `timestamp` | Genesis proposal timestamp |
+
+A genesis block creates the first root state of a track. All future blocks in that track descend from that root.
+
+---
+
+### Research Target Declaration
+
+A genesis block must include a human-readable and machine-indexable declaration of what the track is trying to optimize.
+
+This field does not directly determine truth. It exists to make the track intelligible and auditable.
+
+Examples:
+
+- `Optimize single-GPU language-model training recipe on nanochat-derived baseline`
+- `Optimize efficient CIFAR-100 image classification on consumer GPU`
+- `Optimize optimizer subroutines for small language-model training`
+- `Optimize data pipeline throughput for bounded small-model training`
+
+This declaration supports discovery UX, track selection, adequacy challenges, future migration logic, and human interpretation of what the track claims to be about.
+
+---
+
+### Domain Intent
+
+A `domain_intent` field declares the intended class of value the domain seeks to produce.
+
+Examples:
+
+- `end_to_end_recipe_improvement`
+- `subsystem_optimization`
+- `transferable_optimizer_research`
+- `infrastructure_efficiency`
+- `consumer_gpu_training_efficiency`
+
+This field is not the source of truth. It is a protocol-legible declaration of the intended optimization scope. It is useful for market discovery, governance-neutral metadata, future integration logic, and adequacy analysis.
+
+---
+
+### TrackInitialization
+
+A `TrackInitialization` is the lifecycle process through which a proposed genesis block becomes an active research track.
+
+The protocol supports permissionless genesis with economic filtering.
+
+The activation model is:
+
+1. Any participant may submit a genesis proposal by posting the required seed bond and supplying a complete `RTS`-conformant package.
+2. The protocol checks formal conformance to the declared `RTS`.
+3. Validators reproduce the seed recipe and seed score under the declared environment, dataset, metric, and time budget.
+4. The track activates only if it satisfies all activation conditions.
+5. Poorly defined or economically uninteresting tracks fail because they do not attract sufficient validating and participating commitment.
+
+This avoids centralized gatekeeping while preserving quality filtering.
+
+---
+
+### Genesis Activation Conditions
+
+A genesis proposal activates only if all of the following are true:
+
+- `RTS` conformance passes
+- Required artifacts are publicly available
+- Seed recipe executes successfully under the declared environment
+- Seed score reproduces within declared tolerance
+- Minimum validator participation threshold is met
+- Minimum bonded activation threshold is met
+- No fraud or invalidity challenge is upheld during the activation window
+
+Optional future activation conditions may include:
+
+- minimum initial reward allocation
+- minimum proposer activity commitment
+- minimum domain participation threshold
+- anti-spam creation constraints
+
+If these conditions are not met, the genesis proposal expires or fails.
+
+---
+
+### Failed Genesis Proposals
+
+A genesis proposal that fails activation must have a clear lifecycle outcome.
+
+Possible outcomes include:
+
+- proposal expires due to insufficient validator participation
+- proposal fails due to unreproducible seed score
+- proposal fails due to missing or invalid artifacts
+- proposal fails due to upheld challenge
+- proposal fails due to insufficient economic activation threshold
+
+The protocol defines how seed bonds are returned, partially slashed, or fully slashed depending on the failure reason.
+
+Failed track creation must be economically costly enough to discourage spam, but not so punitive that legitimate experimentation with new tracks becomes impossible.
+
+---
+
+### TrackTree
+
+Each active research track forms a `TrackTree`.
+
+A `TrackTree` is the domain-scoped descendant tree rooted at a single genesis block.
+
+This means the chain is not a single tree with forks. It is a **forest of independent domain-rooted trees**.
+
+Each `TrackTree` has its own:
+
+- genesis block
+- fork families
+- validator sampling scope
+- reward accounting context
+- canonical frontier state
+- materialized state history
+- challenge surface
+- domain-specific policy context
+
+This is the correct topology for a multi-domain research market.
+
+---
+
+### Domain-Scoped Validator Pools
+
+Validator eligibility and assignment are scoped to the track or domain.
+
+A validator who can replay one kind of experiment may not be able to replay another. For example, a validator with a consumer GPU may be able to replay `nanochat-base` but not a more demanding computer vision or distributed systems track.
+
+Validator pools are filtered by:
+
+- hardware compatibility
+- dataset availability requirements
+- environment support
+- track-specific replay requirements
+- bond and eligibility rules
+
+Track-scoped validator pools prevent invalid sampling and keep validation domain-appropriate.
+
+---
+
+### Domain-Scoped Reward Context
+
+Each active research track has its own reward accounting context.
+
+This does not necessarily require fully isolated treasuries, but it does require domain-scoped accounting for:
+
+- proposer rewards
+- validator rewards
+- challenger rewards
+- integration rewards
+- scale-stage rewards
+
+Without domain-aware accounting, economically dominant tracks could starve weaker but still valuable research domains.
+
+Track-level accounting is necessary for a healthy multi-domain research market.
+
+---
+
+### Cross-Track Synthesis
+
+Direct cross-track synthesis is treated cautiously.
+
+Two tracks rooted in different genesis blocks may discover ideas that transfer conceptually across domains. For example, an optimizer trick discovered in a small language-model track may later prove useful in an image classification track.
+
+However, this is not treated as ordinary same-tree ancestry or same-domain fork logic. Cross-track transfer is handled through explicit integration behavior or future protocol extensions. It is not assumed automatically.
+
+This remains an advanced attribution and integration problem and is marked as future work where applicable.
+
+---
+
+### Metric Integrity
+
+The evaluation metric is one of the most security-critical parts of a research track.
+
+If the metric can be gamed easily, the protocol becomes a market for optimizing the wrong thing.
+
+Each track defines a `MetricIntegrityPolicy` including at minimum:
+
+- immutable metric declaration at genesis
+- immutable metric direction
+- frozen evaluation harness
+- separation between `search_surface` and `frozen_surface`
+- replay requirements
+- declared tolerance rules
+- challengeability of invalid or non-functional evaluation setups
+
+The protocol treats metric quality as a serious attack surface.
+
+---
+
+### Frozen Surface and Search Surface
+
+Each genesis block declares:
+
+- `search_surface`: the files or modules that participants and agents are permitted to modify
+- `frozen_surface`: the files or modules that must remain fixed for the track to remain valid
+
+This distinction is essential. For example, training logic may be mutable while the evaluation harness and dataset preparation logic are frozen.
+
+Without this separation, agents may optimize the metric by silently modifying the metric-producing machinery itself. This is incompatible with meaningful adversarial validation.
+
+---
+
+### Metric Adequacy Challenges
+
+A track may have a formally valid metric that later proves to be a poor proxy for the stated research target.
+
+The protocol distinguishes between:
+
+- **metric validity**: the metric is reproducible and conforms to the declared standard
+- **metric adequacy**: the metric is actually a good target for the research problem
+
+Metric adequacy is more subjective and harder to mechanize. It is therefore not casually mutable inside an active track.
+
+Instead, the protocol supports challenge, criticism, and eventual migration paths — not ad hoc mutation of a live market's rules.
+
+---
+
+### Metric Migration and Successor Tracks
+
+If a track's metric is later found to be flawed, the protocol does not silently mutate the active track.
+
+Instead, the correct approach is to create a **successor track** that:
+
+- references the prior track
+- declares the new metric or harness
+- preserves public lineage visibility
+- does not retroactively redefine the settled truth conditions of the prior track
+
+This is similar in spirit to a domain migration or hard fork. The protocol preserves historical integrity rather than editing the past.
+
+---
+
+### Dataset Integrity
+
+Each track defines a `DatasetIntegrityPolicy` including at minimum:
+
+- canonical dataset reference
+- content-addressed dataset identity
+- split declaration
+- dataset availability requirements
+- declared preprocessing rules
+- declared license status where possible
+
+If the dataset disappears or becomes unretrievable, the track becomes unvalidatable. Dataset availability is not a side concern — it is part of the protocol's reproducibility core.
+
+---
+
+### Dataset Splits
+
+The genesis block declares the train, validation, and any test partitions relevant to the track.
+
+This prevents:
+
+- covert evaluation drift
+- hidden split manipulation
+- metric contamination through changing evaluation boundaries
+
+For more advanced tracks, the protocol may later support hidden holdouts, staged evaluation sets, or transfer-stage held-out validation. But the basic requirement remains: the track must declare what data partitions define the game.
+
+---
+
+### Dataset Licensing
+
+The protocol cannot perfectly enforce real-world data licensing. However, a genesis proposal declares at minimum the license status or usage basis of the canonical dataset.
+
+A track built on restricted or non-redistributable data may be fragile or invalid in practice if validators cannot obtain or legally use the dataset. This does not mean the protocol becomes a legal arbiter. It means the protocol makes dataset fragility visible at genesis rather than letting it remain implicit.
+
+---
+
+### Evaluation Harness Immutability
+
+The evaluation harness is part of the frozen surface.
+
+The logic that computes the metric is fixed for the life of the track unless a successor track is explicitly created.
+
+This is essential because a track's economic meaning depends on a stable measurement function. If the harness can be mutated casually:
+
+- historical scores become incomparable
+- fork competition becomes incoherent
+- validation loses legitimacy
+- the reward surface becomes unstable
+
+Tracks must preserve their measurement rules.
+
+---
+
+### Genesis as the Root of Domain Instantiation
+
+A `ProblemDomain` becomes active only when a valid genesis block has been accepted.
+
+A domain is not merely declared by name. It is instantiated by:
+
+- a conformant standard
+- a seed recipe
+- a reproducible baseline
+- an accepted activation process
+
+This keeps domain creation protocol-native rather than socially implied.
+
+---
+
+### Relationship to ProblemDomain and DomainSpec
+
+The objects introduced earlier in the protocol remain valid.
+
+The correct hierarchy is:
+
+- `ResearchTrackStandard` defines the required interface class
+- `GenesisBlock` instantiates a new track under that standard
+- `ProblemDomain` is the active research arena created by the accepted genesis
+- `DomainSpec` describes the active structural rules of that domain
+- `TrackTree` is the descendant tree rooted at the genesis
+
+This preserves consistency with the multi-domain design already present in the protocol.
+
+---
+
+### Required Protocol Guarantees (Genesis)
+
+The research track and genesis layer satisfies the following guarantees:
+
+1. New research tracks can be proposed permissionlessly.
+2. Tracks activate only if they satisfy an accepted research track standard.
+3. Each active track has a reproducible genesis root.
+4. Each track defines a stable metric and evaluation harness.
+5. Search surface and frozen surface are explicitly separated.
+6. Dataset identity and splits are declared at genesis.
+7. Validator eligibility is track-scoped.
+8. Reward accounting is track-scoped.
+9. Metric or harness changes require successor-track style migration, not silent mutation.
+10. The chain is a forest of domain-rooted research trees, not a single monolithic tree.
+
+---
+
+### Rationale (Genesis)
+
+A mature decentralized AI research protocol cannot depend on a socially pre-agreed single-player setup.
+
+In a local tool like `autoresearch`, one human chooses the seed model, the dataset, the metric, the evaluation harness, the time budget, and the search surface.
+
+In a decentralized market, those choices must become:
+
+- explicit
+- reproducible
+- challengeable
+- economically filtered
+- protocol-legible
+
+Research Track Standards and Genesis Blocks provide the missing bootstrapping layer.
+
+They turn the protocol from a system that can optimize inside one implicitly chosen arena into a system that can permissionlessly instantiate many research arenas under shared protocol logic.
 
 ---
 

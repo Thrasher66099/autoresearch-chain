@@ -43,6 +43,7 @@ The protocol currently specifies a decentralized **research-discovery layer**:
 - Scale-validation hooks
 - Agent-driven Stage 1 research (designed around [`karpathy/autoresearch`](https://github.com/karpathy/autoresearch) or similar autonomous research loops)
 - **Multiple concurrent research domains**: the protocol supports many parallel problem domains — from full-model recipe optimization to narrow sub-technique and infrastructure problems — each with its own evaluation logic, fork competition, and reward context
+- **Permissionless track creation**: new research tracks can be instantiated permissionlessly through standardized genesis blocks conforming to a Research Track Standard (RTS), with economic filtering via seed bonds and validator reproduction rather than centralized gatekeeping
 - **Canonical frontier states**: for any active domain, participants can pull the current assembled canonical codebase and begin mining improvements from that state
 
 ## Future Scope
@@ -95,6 +96,8 @@ No code from `autoresearch` is currently included in this repository. See [THIRD
 | Multi-domain research (ProblemDomain, DomainSpec) | Specified |
 | Canonical frontier states and materialization | Specified |
 | Cross-domain integration blocks | Specified |
+| Research Track Standards and genesis blocks | Specified |
+| Track initialization and activation lifecycle | Specified |
 | Stage 3 swarm training protocol | Not yet specified |
 | Gradient attestation system | Not yet specified |
 | Long-horizon compute accounting | Not yet specified |
@@ -110,6 +113,7 @@ No code from `autoresearch` is currently included in this repository. See [THIRD
 | [Protocol v0.2](docs/protocol-v0.2.md) | Technical protocol specification |
 | [Project Scope](docs/project-scope.md) | Current vs. future scope |
 | [Future: Stage 3 Training](docs/future-stage-3-training.md) | Decentralized training layer (future work) |
+| [Genesis and Track Initialization](docs/genesis-and-track-initialization.md) | How new research tracks are created |
 | [Terminology](docs/terminology.md) | Glossary of protocol terms |
 | [Licensing](docs/licensing.md) | Split-license model explained |
 
@@ -131,6 +135,7 @@ docs/
   protocol-v0.2.md                 Technical protocol spec
   project-scope.md                 Scope and staging
   future-stage-3-training.md       Stage 3 future work
+  genesis-and-track-initialization.md  Genesis blocks and track creation
   licensing.md                     Licensing explanation
   terminology.md                   Glossary
 templates/

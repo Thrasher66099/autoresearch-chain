@@ -40,15 +40,14 @@ But “too weak to be trusted” is also not acceptable.
 
 ---
 
-## 4. Domain Creation Policy
+## 4. Genesis and Domain Creation Policy
 
-How open should domain creation be?
+The protocol specifies permissionless genesis with economic filtering through seed bonds, RTS conformance, and validator reproduction. Key open questions remain:
 
-Too strict:
-- the protocol becomes gatekept
-
-Too loose:
-- low-quality or spammy domains can pollute attention and rewards
+- What is the right seed bond size? Too low encourages spam; too high suppresses experimentation.
+- What are the right activation thresholds for minimum validator participation and bonded commitment?
+- How should seed bond slashing scale with failure reason (unreproducible score vs. missing artifacts vs. insufficient participation)?
+- Should there be cooldown periods or rate limits on genesis proposals from the same proposer?
 
 ---
 
@@ -122,15 +121,15 @@ The choice affects usability and reproducibility.
 
 ---
 
-## 11. Agent Policy Surface
+## 11. Agent Policy Surface and Search/Frozen Surface Boundaries
 
 How much freedom should autonomous research agents have inside a domain?
 
-Should they be allowed to modify:
-- all code
-- only selected files
-- only config
-- only certain subsystems
+The protocol specifies that each genesis block declares a search surface and frozen surface. Open questions include:
+
+- How granular should surface declarations be (file-level, module-level, function-level)?
+- How should edge cases between search and frozen surfaces be adjudicated?
+- Should the protocol support dynamic surface expansion through governance or successor tracks?
 
 This affects search breadth, validation complexity, and attack surface.
 

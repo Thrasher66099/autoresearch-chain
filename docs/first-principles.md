@@ -242,6 +242,16 @@ The system must be usable as a living public research substrate.
 
 ---
 
+## 10b. New research arenas must be permissionlessly bootstrappable
+
+In a local tool, one human defines the research arena: the metric, the dataset, the time budget, the search surface.
+
+In a decentralized market, those choices must be formalized through a standardized genesis mechanism. New research tracks must be proposable by any participant — filtered by economic commitment and validator reproduction, not by central gatekeeping.
+
+This is why the protocol defines Research Track Standards and genesis blocks. They make domain creation protocol-native rather than socially implied.
+
+---
+
 ## 11. This is a market design for intelligence production
 
 The project should not be understood merely as:

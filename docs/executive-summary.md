@@ -59,9 +59,11 @@ Validators replay transitions. Challengers dispute false claims. The chain recor
 
 The protocol is not limited to a single benchmark or model. It supports multiple concurrent problem domains — from full end-to-end recipe optimization to narrow sub-technique and infrastructure problems. Each domain has its own evaluation logic, fork competition, and reward context. For any active domain, participants can pull the current canonical assembled codebase and begin mining improvements from that state.
 
+New research tracks can be instantiated permissionlessly through standardized genesis blocks conforming to a Research Track Standard. Track creation is economically filtered — proposers post a seed bond and validators reproduce the baseline — rather than gatekept by governance or central authority.
+
 ## What Exists Today
 
-The protocol specifies a decentralized **research-discovery layer** including block submission, bonded validation, adversarial challenge, fork-native search, staged rewards, scale-validation hooks, multi-domain research support, and canonical frontier state exposure.
+The protocol specifies a decentralized **research-discovery layer** including block submission, bonded validation, adversarial challenge, fork-native search, staged rewards, scale-validation hooks, multi-domain research support, canonical frontier state exposure, and permissionless track creation via Research Track Standards and genesis blocks.
 
 ## What Does Not Exist Yet
 

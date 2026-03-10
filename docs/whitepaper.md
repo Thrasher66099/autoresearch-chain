@@ -230,6 +230,22 @@ This multi-domain structure allows the protocol to function as a general market 
 
 Multi-domain support is specified at the protocol level. See the [Protocol Specification](protocol-v0.2.md) for full object definitions (`ProblemDomain`, `DomainSpec`, `CanonicalFrontierState`, `MaterializedState`, `CodebaseStateRef`) and operational guarantees.
 
+## 10b. Genesis and Track Bootstrapping
+
+A multi-domain protocol requires an explicit mechanism for creating new research arenas. The protocol defines this through Research Track Standards and Genesis Blocks.
+
+A `ResearchTrackStandard` (RTS) is an interface specification that defines the minimum shape a research track must satisfy to participate in the protocol. The first standard, `RTS-1`, covers single-metric fixed-budget experiments suitable for Stage 1 research-discovery markets. Future standards can support multi-metric, efficiency-normalized, or distributed-replay tracks without rewriting core chain logic.
+
+A `GenesisBlock` is the root block of a new track. It declares the research target, seed recipe and baseline score, canonical dataset and splits, evaluation harness and metric, search and frozen surfaces, hardware class, time budget, and a seed bond. A genesis block is not a claim of improvement — it is a claim that a new research arena is well-defined enough to become a protocol-recognized market.
+
+Track creation is permissionless but economically filtered. Any participant may submit a genesis proposal by posting a seed bond and supplying a complete RTS-conformant package. The proposal activates only if it passes conformance checks, seed score reproduction, minimum validator participation, and no upheld challenge. Poorly defined or uninteresting tracks fail naturally because they do not attract economic commitment.
+
+Each active track forms a `TrackTree` — a domain-scoped descendant tree rooted at a genesis block. The chain is therefore a forest of independent domain-rooted trees, each with its own fork families, validator pools, reward context, and canonical frontier.
+
+This means the protocol is not implicitly limited to one benchmark, one seed environment, or one model family. Any conformant research problem can be instantiated as a track. The market, not governance, determines which tracks are worth playing.
+
+See the [Protocol Specification](protocol-v0.2.md#research-track-standards-genesis-blocks-and-domain-initialization) for full object definitions and the [Genesis and Track Initialization](genesis-and-track-initialization.md) companion document for a conceptual overview.
+
 ## 11. Human Value Proposition
 
 AutoResearch Chain could create real value for humanity if it succeeds in creating a global market where GPU owners and AI agents compete to generate, validate, and falsify useful AI research work.

@@ -49,6 +49,11 @@ Stage 1 includes:
 - domain-local and cross-domain work
 - canonical frontier states
 - materialized code snapshots
+- Research Track Standards and permissionless genesis
+- track initialization and activation lifecycle
+- search surface and frozen surface separation
+- metric and dataset integrity policies
+- domain-scoped validator pools and reward context
 
 ### Stage 1 examples
 
@@ -180,9 +185,10 @@ The strongest near-term goals are:
 1. clarify and harden the Stage 1 protocol
 2. improve docs and terminology
 3. define domain and canonical frontier behavior clearly
-4. specify scale validation incentives
-5. make user workflows legible
-6. begin mapping the eventual Stage 3 design space
+4. harden genesis block mechanics, activation conditions, and failed-genesis lifecycle
+5. specify scale validation incentives
+6. make user workflows legible
+7. begin mapping the eventual Stage 3 design space
 
 ---
 

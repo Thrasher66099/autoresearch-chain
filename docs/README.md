@@ -17,7 +17,8 @@ This directory contains the full project documentation for AutoResearch Chain.
 
 | Document | Description |
 |----------|-------------|
-| [Protocol v0.2](protocol-v0.2.md) | Technical protocol specification: system model, roles, blocks, validation, forks, rewards, challenges, multi-domain research, and canonical frontier states |
+| [Protocol v0.2](protocol-v0.2.md) | Technical protocol specification: system model, roles, blocks, validation, forks, rewards, challenges, multi-domain research, canonical frontier states, research track standards, and genesis blocks |
+| [Genesis and Track Initialization](genesis-and-track-initialization.md) | Conceptual overview of how new research tracks are created through genesis blocks and Research Track Standards |
 
 ### Scope and Roadmap
 

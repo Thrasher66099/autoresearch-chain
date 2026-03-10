@@ -245,7 +245,43 @@ Governance should not manually decide:
 
 ---
 
-## 8. Cold-Start Reader Workflow
+## 8. Track Creator Workflow — Genesis Proposer
+
+### Goal
+
+Create a new research track by proposing a genesis block.
+
+### Example user
+
+A researcher or team who has identified a well-defined research problem with a reproducible baseline, a canonical dataset, and a clear evaluation metric.
+
+### Workflow
+
+1. Define the research target and domain intent.
+2. Prepare a seed recipe with a reproducible baseline score.
+3. Prepare or identify a canonical dataset with declared splits.
+4. Prepare or identify an evaluation harness and metric.
+5. Define the search surface (what agents may modify) and frozen surface (what must stay fixed).
+6. Declare hardware class and time budget for replay.
+7. Submit a genesis proposal conforming to the relevant Research Track Standard (e.g., `RTS-1`), posting the required seed bond.
+8. Wait for validator reproduction of the seed score.
+9. If activation conditions are met, the track becomes active and open to participation.
+
+### Conceptual commands
+
+    arc genesis propose --rts RTS-1 --config genesis-spec.yaml
+    arc genesis status <genesis-id>
+
+### What the track creator contributes
+
+- a well-defined research problem
+- a reproducible baseline
+- a canonical dataset and evaluation harness
+- economic commitment via seed bond
+
+---
+
+## 9. Cold-Start Reader Workflow
 
 ### Goal
 
@@ -273,4 +309,6 @@ For every active domain, a participant should be able to:
 4. run work from that state
 5. submit, validate, challenge, or integrate results
 
-If this is not possible, the protocol is not yet usable as a living public research substrate.
+Additionally, any participant should be able to propose a new research track through a permissionless genesis block, subject to RTS conformance and economic activation conditions.
+
+If these workflows are not possible, the protocol is not yet usable as a living public research substrate.

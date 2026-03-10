@@ -212,22 +212,26 @@ Domain design and integration policy must remain strict.
 
 ---
 
-## 11. Domain Pollution
+## 11. Domain Pollution / Genesis Spam
 
 ### Attack
-A participant introduces low-quality or badly scoped domains to attract rewards or fragment attention.
+A participant introduces low-quality or badly scoped domains through permissionless genesis proposals to attract rewards, fragment attention, or waste validator resources.
 
 ### Failure mode
-The protocol becomes cluttered with low-signal arenas.
+The protocol becomes cluttered with low-signal arenas. Validator bandwidth is consumed by worthless track activation attempts.
 
 ### Mitigations
-- domain policy requirements
+- seed bond requirements for genesis proposals
+- RTS conformance checking
+- seed score reproduction by validators before activation
+- minimum validator participation and bonded activation thresholds
+- failed genesis bond slashing (proportional to failure reason)
 - structured DomainSpec rules
 - clear evaluation surfaces
 - reward accounting boundaries
 
 ### Open risk
-A future domain-creation policy must balance openness with anti-spam protection.
+Genesis bond calibration must balance openness with anti-spam protection. Too low and spam dominates; too high and legitimate experimentation is suppressed.
 
 ---
 
@@ -311,7 +315,27 @@ If frontier settlement is weak, poison spreads downstream quickly.
 
 ---
 
-## 16. Long-Horizon Overclaiming
+## 16. Evaluation Harness Manipulation
+
+### Attack
+A participant attempts to improve the metric by modifying the evaluation harness or dataset preparation logic rather than the actual training recipe.
+
+### Failure mode
+The protocol rewards changes to the measurement machinery rather than genuine research progress.
+
+### Mitigations
+- frozen surface declaration at genesis (evaluation harness and dataset logic are frozen)
+- search surface / frozen surface separation enforced by validators
+- MetricIntegrityPolicy per track
+- evaluation harness immutability for the life of the track
+- challengeability of blocks that violate surface constraints
+
+### Open risk
+Subtle boundary cases between search and frozen surface may require careful initial scoping in each genesis block.
+
+---
+
+## 17. Long-Horizon Overclaiming
 
 ### Attack
 The project itself or its community overstates what is already specified or implemented, especially around Stage 3.

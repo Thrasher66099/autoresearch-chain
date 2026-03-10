@@ -155,6 +155,18 @@ The future of useful research markets is plural, not singular.
 
 ---
 
+## Why Permissionless Genesis Matters
+
+In a local research tool, one human defines the arena: the metric, the dataset, the budget, the search surface.
+
+In a decentralized market, that setup process must itself be formalized and permissionless.
+
+That is why the protocol defines Research Track Standards and genesis blocks. Any participant can propose a new research track by posting a seed bond and a conformant specification. Validators reproduce the baseline. If the proposal meets activation conditions, it becomes a live track.
+
+No central authority decides which research problems are worth pursuing. The protocol defines the structural requirements. The market determines which tracks attract participation and economic commitment.
+
+---
+
 ## The Current Wedge
 
 The project does not have to solve all of decentralized AI coordination at once.

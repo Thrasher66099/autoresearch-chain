@@ -45,7 +45,8 @@ The current protocol covers:
 - fork competition,
 - canonical frontier states,
 - multi-domain research,
-- and cross-domain integration.
+- cross-domain integration,
+- and permissionless track creation through standardized genesis blocks.
 
 ### A market for AI training improvements
 The current explicit target is mining improvements to:
@@ -74,9 +75,10 @@ The claim is much narrower and stronger:
 The system is not supposed to be a company-run service where a trusted operator decides:
 - who can participate,
 - what counts,
+- what research problems are valid,
 - or who gets paid.
 
-If that happens, the core thesis breaks.
+New research tracks are instantiated permissionlessly through genesis blocks, not approved by a central committee. If centralized gatekeeping becomes required, the core thesis breaks.
 
 ### Not merely a science DAO
 Governance exists in the design, but governance does not define scientific truth.

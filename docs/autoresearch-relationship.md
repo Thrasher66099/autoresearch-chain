@@ -64,9 +64,12 @@ Autoresearch-style loops alone do not provide:
 - attribution
 - domain-local and cross-domain research markets
 - canonical frontier settlement
+- permissionless genesis and track bootstrapping
 - eventual transfer validation
 
 AutoResearch Chain adds the market and protocol structure around the loop.
+
+In a local tool, one human chooses the seed model, the metric, the dataset, and the search surface. In the protocol, those choices are formalized through Research Track Standards and genesis blocks — making them explicit, reproducible, challengeable, and permissionless.
 
 This is the difference between:
 - a local research tool

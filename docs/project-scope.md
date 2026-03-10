@@ -24,6 +24,8 @@ The protocol specifies:
 - **Multi-domain research**: the protocol supports multiple concurrent problem domains, each with its own codebase, evaluation logic, fork competition space, and reward context
 - **Canonical frontier states**: each domain exposes a pullable assembled codebase representing the current best state, so participants can retrieve the working codebase for any domain and begin mining improvements from it
 - **Hierarchical domains and cross-domain integration**: specialized sub-problem work can occur in narrow domains without polluting broader frontiers, and successful results can be integrated upstream through explicit cross-domain blocks
+- **Research Track Standards and genesis blocks**: new research tracks can be instantiated permissionlessly through standardized genesis blocks conforming to a Research Track Standard (RTS), with economic filtering via seed bonds and validator reproduction
+- **Track initialization and activation lifecycle**: genesis proposals pass through conformance checking, seed reproduction, and activation thresholds before becoming active tracks; failed proposals have defined bond outcomes
 
 ### What This Implements
 
@@ -92,6 +94,13 @@ Stage 3 is **not yet formally specified**. It is compatible with the protocol de
 - Cross-domain integration blocks for porting results between domains
 - Canonical frontier state exposure per domain (pullable assembled codebase)
 - Domain-local reward separation and accounting
+- Research Track Standards (RTS-1 and future RTS classes)
+- Permissionless genesis block proposals with economic filtering
+- Track initialization, activation conditions, and failed genesis lifecycle
+- Search surface and frozen surface separation at genesis
+- Metric and dataset integrity policies
+- Domain-scoped validator pools and reward context
+- Metric migration via successor tracks
 
 ## Not Yet Fully Specified
 
@@ -102,6 +111,7 @@ Stage 3 is **not yet formally specified**. It is compatible with the protocol de
 - Governance implementation details
 - Reference implementation
 - Multi-domain reference client tooling (the protocol specifies multi-domain objects and guarantees; client-side tooling for domain discovery and state retrieval is not yet implemented)
+- Genesis block submission tooling (the protocol specifies genesis mechanics; no reference tooling for proposing or activating tracks exists yet)
 
 ---
 

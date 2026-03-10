@@ -145,6 +145,34 @@ Each domain has its own frontier, evaluation logic, and reward context.
 
 ---
 
+## How are new research domains created?
+
+New research tracks are created through permissionless genesis blocks.
+
+A participant proposes a genesis block that conforms to a Research Track Standard (RTS). The proposal includes a seed recipe, baseline score, canonical dataset, evaluation harness, and a seed bond. Validators reproduce the baseline, and the track activates only if conformance, reproduction, and economic thresholds are all met.
+
+No central authority decides which research problems are valid. The protocol defines the structural requirements; the market determines which tracks attract participation.
+
+---
+
+## What is a Research Track Standard?
+
+A Research Track Standard (RTS) is an interface specification that defines the minimum shape a research track must satisfy to participate in the protocol.
+
+The first standard, `RTS-1`, covers single-metric fixed-budget experiments with bounded single-node or single-GPU replay — the standard case for Stage 1 research-discovery markets.
+
+Future standards can support multi-metric tracks, efficiency-normalized evaluation, or distributed replay without rewriting core chain logic.
+
+---
+
+## What prevents someone from creating spam domains?
+
+Genesis proposals require a seed bond. The baseline must be reproducible by validators. If the proposal fails — due to unreproducible scores, missing artifacts, or insufficient participation — the bond may be partially or fully slashed.
+
+This makes genesis spam economically costly without requiring centralized gatekeeping.
+
+---
+
 ## Can users work on sub-problems, not just one model like `nanochat`?
 
 Yes.
