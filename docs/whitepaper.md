@@ -25,13 +25,15 @@ At a high level:
 
 AutoResearch Chain treats AI training improvements as mineable discoveries.
 
-Participants use GPUs to mine:
+Participants use GPUs to mine improvements across many concurrent research domains:
 
 - training-code improvements,
 - optimizer improvements,
 - scheduler improvements,
 - architecture improvements,
 - scaling insights,
+- component-level and infrastructure improvements,
+- narrow sub-technique optimizations,
 - and later, sustained training contribution itself.
 
 This is **Proof of Useful Work** because GPU cycles are spent producing useful AI research rather than arbitrary hash puzzles.
@@ -214,7 +216,21 @@ To prevent this:
 - trivial blocks should receive little or no downstream share,
 - reward should follow causal contribution, not just position in history.
 
-## 10. Human Value Proposition
+## 10. Multi-Domain Research Markets
+
+The protocol is not bound to a single benchmark, a single model, or a single research target.
+
+Instead, it supports multiple concurrent research arenas through the `ProblemDomain` abstraction. Each domain is a formal protocol object with its own codebase, evaluation logic, fork competition space, canonical frontier state, and reward context.
+
+Domains may be hierarchical. A broad domain such as `language-model-training` may contain child domains like `optimizer-subspace`, `scheduler-subspace`, or `data-pipeline-efficiency`. Specialized work happens in narrow domains without polluting the main frontier. When a specialized result proves valuable at a broader scope, it is integrated upstream through an explicit cross-domain integration block that must survive validation and challenge in the destination domain.
+
+For every active domain, the protocol exposes a `CanonicalFrontierState`: the current best assembled codebase that any participant can pull, inspect, and improve. This makes the chain not merely a ledger of diffs, but a live versioned research substrate.
+
+This multi-domain structure allows the protocol to function as a general market for AI research work — supporting many models, many benchmarks, many subsystems, and many narrow research loops — while preserving a simple invariant: for any domain, there is always a pullable canonical codebase representing the current state of the art.
+
+Multi-domain support is specified at the protocol level. See the [Protocol Specification](protocol-v0.2.md) for full object definitions (`ProblemDomain`, `DomainSpec`, `CanonicalFrontierState`, `MaterializedState`, `CodebaseStateRef`) and operational guarantees.
+
+## 11. Human Value Proposition
 
 AutoResearch Chain could create real value for humanity if it succeeds in creating a global market where GPU owners and AI agents compete to generate, validate, and falsify useful AI research work.
 
@@ -230,7 +246,7 @@ The value is not "because blockchain."
 The value is the research.
 Blockchain is the mechanism that lets the trustless market exist.
 
-## 11. Design Principles
+## 12. Design Principles
 
 1. Parallel search is first-class.
 2. Validation is provisional.
@@ -243,7 +259,7 @@ Blockchain is the mechanism that lets the trustless market exist.
 9. Ancestry alone should not produce rent.
 10. Useful work, not arbitrary hashing, is the core mining primitive.
 
-## 12. Current Identity
+## 13. Current Identity
 
 The cleanest description of the current system is:
 
@@ -257,7 +273,7 @@ A future version may also become:
 
 But that is a later layer, not the current complete spec.
 
-## 13. Short Thesis
+## 14. Short Thesis
 
 AutoResearch Chain is a fully decentralized, adversarial, fork-native market in which GPU owners and AI agents mine validated improvements to AI training recipes.
 

@@ -21,6 +21,9 @@ The protocol specifies:
 - **Staged rewards**: rewards are released incrementally based on survival through falsification
 - **Scale-validation hooks**: Stage 2 validators can test whether improvements transfer to larger models
 - **Agent-driven Stage 1**: the mining primitive is designed around autonomous research agents running short-horizon GPU experiments
+- **Multi-domain research**: the protocol supports multiple concurrent problem domains, each with its own codebase, evaluation logic, fork competition space, and reward context
+- **Canonical frontier states**: each domain exposes a pullable assembled codebase representing the current best state, so participants can retrieve the working codebase for any domain and begin mining improvements from it
+- **Hierarchical domains and cross-domain integration**: specialized sub-problem work can occur in narrow domains without polluting broader frontiers, and successful results can be integrated upstream through explicit cross-domain blocks
 
 ### What This Implements
 
@@ -84,6 +87,11 @@ Stage 3 is **not yet formally specified**. It is compatible with the protocol de
 - Fork-native competition
 - Challenge-based falsification
 - Larger-scale validation hooks (Stage 2)
+- Multi-domain recipe-mining across concurrent problem domains
+- Sub-problem mining in hierarchical child domains (e.g., optimizer, scheduler, data pipeline)
+- Cross-domain integration blocks for porting results between domains
+- Canonical frontier state exposure per domain (pullable assembled codebase)
+- Domain-local reward separation and accounting
 
 ## Not Yet Fully Specified
 
@@ -93,6 +101,7 @@ Stage 3 is **not yet formally specified**. It is compatible with the protocol de
 - Token economics (beyond staged reward structure)
 - Governance implementation details
 - Reference implementation
+- Multi-domain reference client tooling (the protocol specifies multi-domain objects and guarantees; client-side tooling for domain discovery and state retrieval is not yet implemented)
 
 ---
 

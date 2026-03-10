@@ -33,9 +33,11 @@ Blockchain is the mechanism that makes a **trustless, permissionless, auditable 
 
 AutoResearch Chain is best understood as a decentralized market for:
 
-- AI training recipe discovery,
+- AI training recipe discovery across multiple concurrent research domains,
 - validation,
 - falsification,
+- specialized sub-problem and component-level optimization,
+- cross-domain integration of useful results,
 - and eventually decentralized large-scale training.
 
 ## Stage 1: The Mining Primitive
@@ -53,9 +55,13 @@ A participant runs a local training environment with an AI agent. The agent:
 
 Validators replay transitions. Challengers dispute false claims. The chain records and rewards validated progress.
 
+## Multi-Domain Research
+
+The protocol is not limited to a single benchmark or model. It supports multiple concurrent problem domains — from full end-to-end recipe optimization to narrow sub-technique and infrastructure problems. Each domain has its own evaluation logic, fork competition, and reward context. For any active domain, participants can pull the current canonical assembled codebase and begin mining improvements from that state.
+
 ## What Exists Today
 
-The protocol specifies a decentralized **research-discovery layer** including block submission, bonded validation, adversarial challenge, fork-native search, staged rewards, and scale-validation hooks.
+The protocol specifies a decentralized **research-discovery layer** including block submission, bonded validation, adversarial challenge, fork-native search, staged rewards, scale-validation hooks, multi-domain research support, and canonical frontier state exposure.
 
 ## What Does Not Exist Yet
 

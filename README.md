@@ -42,6 +42,8 @@ The protocol currently specifies a decentralized **research-discovery layer**:
 - Escrowed, staged rewards
 - Scale-validation hooks
 - Agent-driven Stage 1 research (designed around [`karpathy/autoresearch`](https://github.com/karpathy/autoresearch) or similar autonomous research loops)
+- **Multiple concurrent research domains**: the protocol supports many parallel problem domains — from full-model recipe optimization to narrow sub-technique and infrastructure problems — each with its own evaluation logic, fork competition, and reward context
+- **Canonical frontier states**: for any active domain, participants can pull the current assembled canonical codebase and begin mining improvements from that state
 
 ## Future Scope
 
@@ -90,6 +92,9 @@ No code from `autoresearch` is currently included in this repository. See [THIRD
 | Fork-native competition | Specified |
 | Challenge-based falsification | Specified |
 | Scale-validation hooks | Specified |
+| Multi-domain research (ProblemDomain, DomainSpec) | Specified |
+| Canonical frontier states and materialization | Specified |
+| Cross-domain integration blocks | Specified |
 | Stage 3 swarm training protocol | Not yet specified |
 | Gradient attestation system | Not yet specified |
 | Long-horizon compute accounting | Not yet specified |

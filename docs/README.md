@@ -17,7 +17,7 @@ This directory contains the full project documentation for AutoResearch Chain.
 
 | Document | Description |
 |----------|-------------|
-| [Protocol v0.2](protocol-v0.2.md) | Technical protocol specification: system model, roles, blocks, validation, forks, rewards, challenges |
+| [Protocol v0.2](protocol-v0.2.md) | Technical protocol specification: system model, roles, blocks, validation, forks, rewards, challenges, multi-domain research, and canonical frontier states |
 
 ### Scope and Roadmap
 
