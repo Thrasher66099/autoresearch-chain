@@ -1,0 +1,36 @@
+
+---
+
+# LICENSE-AGPL
+
+```text
+SPDX-License-Identifier: AGPL-3.0-or-later
+
+AutoResearch Chain
+Core protocol and network-facing software license
+
+This repository intends core software, protocol implementations, validator software,
+challenger software, node software, orchestration code, and other network-facing
+software components to be licensed under the GNU Affero General Public License,
+version 3 or (at your option) any later version.
+
+IMPORTANT:
+This file is a repository placeholder and short-form notice.
+For a public production release, maintainers should replace or supplement this
+file with the full canonical text of the GNU Affero General Public License.
+
+Official license information:
+https://www.gnu.org/licenses/agpl-3.0.html
+
+Summary of intent:
+- You may use, study, modify, and redistribute covered software
+  under the terms of the AGPL.
+- If you modify covered software and make it available for use over a network,
+  you must also make the corresponding source available under the AGPL.
+- This is intended to keep protocol-critical software in the commons.
+
+NO WARRANTY:
+This software is provided without warranty of any kind, to the extent permitted
+by the applicable license.
+
+For the full legal terms, use the complete official AGPL license text.

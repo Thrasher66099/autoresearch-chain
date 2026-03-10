@@ -1,0 +1,110 @@
+AutoResearch Chain
+Copyright (C) 2026 AutoResearch Chain contributors
+
+This project is a fully decentralized, fork-native Proof-of-Useful-Work protocol
+for mining validated improvements to AI training recipes.
+
+This NOTICE file provides attribution, provenance, and repository-level notice
+information for the AutoResearch Chain project.
+
+-------------------------------------------------------------------------------
+Project Licensing Overview
+-------------------------------------------------------------------------------
+
+Unless otherwise noted:
+
+1. Core protocol and network-facing software in this repository are licensed under:
+   GNU Affero General Public License v3.0 or later
+   (AGPL-3.0-or-later)
+
+2. Documentation, specifications, white papers, research writing, diagrams, and
+   other non-code materials in this repository are licensed under:
+   Creative Commons Attribution-ShareAlike 4.0 International
+   (CC BY-SA 4.0)
+
+3. Third-party code, dependencies, vendored components, and external assets
+   remain under their original licenses and are not relicensed by this project.
+
+See:
+- LICENSES.md
+- LICENSE-AGPL
+- LICENSE-CC-BY-SA
+- THIRD_PARTY_NOTICES.md
+
+-------------------------------------------------------------------------------
+Project Intent
+-------------------------------------------------------------------------------
+
+AutoResearch Chain is intended to be a trustless market for useful AI research
+work. The project’s design philosophy is that adversarial incentives should be
+structured so that participants are economically motivated to propose, validate,
+challenge, and refine improvements to AI training recipes.
+
+The value of the system is the research output.
+Blockchain is the mechanism that enables a permissionless, auditable,
+non-custodial market for that research.
+
+-------------------------------------------------------------------------------
+Upstream Inspiration and Related Work
+-------------------------------------------------------------------------------
+
+This project is informed by prior work in autonomous research tooling,
+distributed validation systems, proof-of-work design, and machine learning
+research infrastructure.
+
+In particular, the project concept explicitly contemplates integration with
+autonomous research-agent systems such as Andrej Karpathy’s "autoresearch"
+or similar agent-driven research loops.
+
+Inspiration, compatibility, or conceptual influence does not by itself imply
+that upstream code has been copied into this repository.
+
+If any third-party code is copied, modified, vendored, or redistributed in this
+repository, the original copyright notices and license obligations for that code
+must be preserved and documented in THIRD_PARTY_NOTICES.md.
+
+-------------------------------------------------------------------------------
+No Additional Trademark Grant
+-------------------------------------------------------------------------------
+
+Any project names, marks, logos, or branding associated with AutoResearch Chain
+are not automatically licensed for trademark use by the copyright licenses
+applicable to the code or documentation.
+
+-------------------------------------------------------------------------------
+Contributor Notice
+-------------------------------------------------------------------------------
+
+By contributing to this repository, contributors agree that:
+
+- code contributions are licensed under AGPL-3.0-or-later unless explicitly
+  marked otherwise; and
+- documentation and non-code contributions are licensed under CC BY-SA 4.0
+  unless explicitly marked otherwise.
+
+Contributors are responsible for ensuring that any third-party material they add
+to the repository is properly attributed and legally compatible.
+
+-------------------------------------------------------------------------------
+Canonical Source of Truth
+-------------------------------------------------------------------------------
+
+If there is any conflict between this NOTICE file and a file-level or
+directory-level license notice, the more specific notice controls.
+
+If there is any conflict between repository guidance and an upstream third-party
+license attached to included third-party material, the upstream license controls
+that third-party material.
+
+-------------------------------------------------------------------------------
+Maintainer Reminder
+-------------------------------------------------------------------------------
+
+Before public release, maintainers should verify that:
+
+- full canonical license texts are included at the repository root;
+- file and directory notices are accurate;
+- copied or vendored upstream components are documented;
+- required notices are preserved in source distributions and releases.
+
+End of NOTICE
