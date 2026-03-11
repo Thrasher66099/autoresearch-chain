@@ -172,6 +172,7 @@ mod tests {
             BlockStatus::Settled,
             BlockStatus::Final,
             BlockStatus::Rejected,
+            BlockStatus::Invalidated,
         ];
         for (i, a) in statuses.iter().enumerate() {
             for (j, b) in statuses.iter().enumerate() {

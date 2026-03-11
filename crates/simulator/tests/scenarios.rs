@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Phase 0.2 scenario tests.
+//! Protocol scenario tests.
 //!
 //! These tests exercise the integrated protocol state machine through
 //! realistic multi-step scenarios. Each test tells a story about the
 //! protocol behaving (or correctly refusing to behave).
+//!
+//! Scenarios A-J: Phase 0.2 (basic lifecycle, validation, forks, challenges)
+//! Scenarios K-Q: Phase 0.3 (challenge consequences, validated frontier,
+//!                escrow, invalidation, descendant handling)
 
 use arc_protocol_types::*;
 use arc_domain_engine::genesis::SeedValidationRecord;
@@ -91,6 +95,32 @@ fn submit_and_validate(
             validator: *v,
             vote: ValidatorVote::Pass,
             observed_delta: Some(MetricValue::new(0.015)),
+            replay_evidence_ref: test_artifact_hash(70),
+            timestamp: 1700002000,
+        })
+        .unwrap();
+    }
+
+    sim.evaluate_block(&block_id).unwrap()
+}
+
+/// Submit a block with custom observed deltas for validators.
+/// All validators pass, but with the specified observed delta.
+fn submit_and_validate_with_delta(
+    sim: &mut SimulatorState,
+    block: Block,
+    observed_delta: f64,
+) -> ProvisionalOutcome {
+    let block_id = block.id;
+    sim.submit_block(block).unwrap();
+    let assigned = sim.assign_validators(&block_id).unwrap();
+
+    for v in &assigned {
+        sim.record_attestation(ValidationAttestation {
+            block_id,
+            validator: *v,
+            vote: ValidatorVote::Pass,
+            observed_delta: Some(MetricValue::new(observed_delta)),
             replay_evidence_ref: test_artifact_hash(70),
             timestamp: 1700002000,
         })
@@ -402,21 +432,21 @@ fn scenario_f_frontier_tracks_best_block() {
     let (mut sim, domain_id, genesis_id) = setup_active_domain();
     let parent = genesis_id.as_block_id();
 
-    // Block with delta 0.01.
+    // Block with validated delta 0.01.
     let block_a = make_block(10, parent, domain_id, 0.01);
     let block_a_id = block_a.id;
-    submit_and_validate(&mut sim, block_a);
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
     assert_eq!(sim.canonical_frontier(&domain_id), Some(block_a_id));
 
-    // Better block with delta 0.03.
+    // Better block with validated delta 0.03.
     let block_b = make_block(11, parent, domain_id, 0.03);
     let block_b_id = block_b.id;
-    submit_and_validate(&mut sim, block_b);
+    submit_and_validate_with_delta(&mut sim, block_b, 0.03);
     assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
 
-    // Worse block with delta 0.005 — frontier should NOT change.
+    // Worse block with validated delta 0.005 — frontier should NOT change.
     let block_c = make_block(12, parent, domain_id, 0.005);
-    submit_and_validate(&mut sim, block_c);
+    submit_and_validate_with_delta(&mut sim, block_c, 0.005);
     assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
 }
 
@@ -427,17 +457,17 @@ fn scenario_f_chain_of_improvements() {
     // Linear chain: genesis → block_a → block_b → block_c
     let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.01);
     let block_a_id = block_a.id;
-    submit_and_validate(&mut sim, block_a);
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
     assert_eq!(sim.canonical_frontier(&domain_id), Some(block_a_id));
 
     let block_b = make_block(11, block_a_id, domain_id, 0.02);
     let block_b_id = block_b.id;
-    submit_and_validate(&mut sim, block_b);
+    submit_and_validate_with_delta(&mut sim, block_b, 0.02);
     assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
 
     let block_c = make_block(12, block_b_id, domain_id, 0.03);
     let block_c_id = block_c.id;
-    submit_and_validate(&mut sim, block_c);
+    submit_and_validate_with_delta(&mut sim, block_c, 0.03);
     assert_eq!(sim.canonical_frontier(&domain_id), Some(block_c_id));
 }
 
@@ -636,4 +666,459 @@ fn scenario_j_attestation_summary() {
     assert!(summary.mean_observed_delta.is_some());
     let mean = summary.mean_observed_delta.unwrap();
     assert!((mean - 0.015).abs() < 1e-10);
+}
+
+// =======================================================================
+// Phase 0.3 Scenario Tests
+// =======================================================================
+
+// =======================================================================
+// Scenario K: Upheld challenge invalidates an accepted block
+// =======================================================================
+
+#[test]
+fn scenario_k_upheld_challenge_invalidates_block() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    assert_eq!(sim.block_status(&block_id), Some(BlockStatus::UnderChallenge));
+
+    // Open challenge.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+
+    // Review and uphold.
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Block should now be Invalidated.
+    assert_eq!(sim.block_status(&block_id), Some(BlockStatus::Invalidated));
+
+    // Challenge should be Upheld.
+    assert_eq!(sim.challenges[&challenge_id].status, ChallengeStatus::Upheld);
+
+    // Validated outcome should be removed.
+    assert!(sim.validated_outcome(&block_id).is_none());
+}
+
+#[test]
+fn scenario_k_upheld_challenge_slashes_escrow() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    // Escrow should exist and be Held.
+    let escrow = sim.block_escrow(&block_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Held);
+    assert_eq!(escrow.amount, TokenAmount::new(500)); // block bond
+
+    // Uphold challenge.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Escrow should now be Slashed.
+    let escrow = sim.block_escrow(&block_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Slashed);
+}
+
+// =======================================================================
+// Scenario L: Upheld challenge prevents/reverses frontier advancement
+// =======================================================================
+
+#[test]
+fn scenario_l_upheld_challenge_reverses_frontier() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let parent = genesis_id.as_block_id();
+
+    // Block A: observed delta 0.01.
+    let block_a = make_block(10, parent, domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    // Block B: observed delta 0.03 (better, becomes frontier).
+    let block_b = make_block(11, parent, domain_id, 0.03);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.03);
+
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+
+    // Challenge and invalidate block B (the frontier).
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_b_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Block B invalidated.
+    assert_eq!(sim.block_status(&block_b_id), Some(BlockStatus::Invalidated));
+
+    // Frontier should now fall back to block A.
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_a_id));
+}
+
+#[test]
+fn scenario_l_invalidating_only_block_clears_frontier() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_id));
+
+    // Invalidate the only block.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // No frontier should exist.
+    assert!(sim.canonical_frontier(&domain_id).is_none());
+}
+
+// =======================================================================
+// Scenario M: Rejected challenge preserves accepted state
+// =======================================================================
+
+#[test]
+fn scenario_m_rejected_challenge_preserves_state() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    assert_eq!(sim.block_status(&block_id), Some(BlockStatus::UnderChallenge));
+    let frontier_before = sim.canonical_frontier(&domain_id);
+
+    // Open, review, and reject the challenge.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.reject_challenge(&challenge_id).unwrap();
+
+    // Block status unchanged.
+    assert_eq!(sim.block_status(&block_id), Some(BlockStatus::UnderChallenge));
+
+    // Frontier unchanged.
+    assert_eq!(sim.canonical_frontier(&domain_id), frontier_before);
+
+    // Escrow still Held.
+    let escrow = sim.block_escrow(&block_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Held);
+
+    // Validated outcome still present.
+    assert!(sim.validated_outcome(&block_id).is_some());
+
+    // Challenge marked Rejected.
+    assert_eq!(sim.challenges[&challenge_id].status, ChallengeStatus::Rejected);
+}
+
+// =======================================================================
+// Scenario N: Frontier selection uses validated metrics
+// =======================================================================
+
+#[test]
+fn scenario_n_frontier_uses_validated_not_claimed() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let parent = genesis_id.as_block_id();
+
+    // Block A: claims delta 0.05, but validators observe only 0.01.
+    let block_a = make_block(10, parent, domain_id, 0.05);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    // Block B: claims delta 0.01, but validators observe 0.03.
+    let block_b = make_block(11, parent, domain_id, 0.01);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.03);
+
+    // If frontier used claimed values, block A (0.05) would win.
+    // With validated values, block B (0.03) wins over block A (0.01).
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+
+    // Validate the stored outcomes match the observed values.
+    let outcome_a = sim.validated_outcome(&block_a_id).unwrap();
+    assert!((outcome_a.validated_metric_value.as_f64() - 0.01).abs() < 1e-10);
+
+    let outcome_b = sim.validated_outcome(&block_b_id).unwrap();
+    assert!((outcome_b.validated_metric_value.as_f64() - 0.03).abs() < 1e-10);
+}
+
+// =======================================================================
+// Scenario O: Fork dominance ignores invalidated branches
+// =======================================================================
+
+#[test]
+fn scenario_o_dominance_ignores_invalidated_branch() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let parent = genesis_id.as_block_id();
+
+    // Create a fork: two competing blocks off genesis.
+    let block_a = make_block(10, parent, domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, parent, domain_id, 0.05);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.05);
+
+    // Block B is frontier (higher validated metric).
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+
+    // Fork family should exist with both tips.
+    let families = sim.fork_families(&domain_id);
+    assert_eq!(families.len(), 1);
+    assert_eq!(families[0].branch_tips.len(), 2);
+
+    // Invalidate block B.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_b_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Block B removed from branch tips.
+    let families = sim.fork_families(&domain_id);
+    assert_eq!(families.len(), 1);
+    assert_eq!(families[0].branch_tips.len(), 1);
+    assert!(families[0].branch_tips.contains(&block_a_id));
+    assert!(!families[0].branch_tips.contains(&block_b_id));
+
+    // Frontier falls back to block A.
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_a_id));
+}
+
+// =======================================================================
+// Scenario P: Accepted blocks create escrow records
+// =======================================================================
+
+#[test]
+fn scenario_p_accepted_block_creates_escrow() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+
+    // Before acceptance: no escrow.
+    assert!(sim.block_escrow(&block_id).is_none());
+
+    submit_and_validate(&mut sim, block);
+
+    // After acceptance: escrow exists and is Held.
+    let escrow = sim.block_escrow(&block_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Held);
+    assert_eq!(escrow.block_id, block_id);
+    assert_eq!(escrow.amount, TokenAmount::new(500));
+}
+
+#[test]
+fn scenario_p_settlement_releases_escrow() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    // Escrow is Held.
+    assert_eq!(sim.block_escrow(&block_id).unwrap().status, EscrowStatus::Held);
+
+    // Settle the block.
+    sim.close_challenge_window(&block_id).unwrap();
+    sim.settle_block(&block_id).unwrap();
+
+    // Escrow is Released.
+    assert_eq!(sim.block_escrow(&block_id).unwrap().status, EscrowStatus::Released);
+}
+
+#[test]
+fn scenario_p_validated_outcome_records_attestation_truth() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    // Validated outcome should exist.
+    let outcome = sim.validated_outcome(&block_id).unwrap();
+    assert_eq!(outcome.block_id, block_id);
+    assert_eq!(outcome.attestation_count, 3); // 3 validators
+    // All validators reported 0.015 in submit_and_validate.
+    assert!((outcome.validated_metric_value.as_f64() - 0.015).abs() < 1e-10);
+}
+
+// =======================================================================
+// Scenario Q: Descendant handling after parent invalidation
+// =======================================================================
+
+#[test]
+fn scenario_q_child_on_invalidated_parent_excluded_from_frontier() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Chain: genesis → block_a → block_b
+    let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, block_a_id, domain_id, 0.05);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.05);
+
+    // Block B is frontier (0.05 > 0.01).
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+
+    // Invalidate block A (the parent).
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Block A is Invalidated.
+    assert_eq!(sim.block_status(&block_a_id), Some(BlockStatus::Invalidated));
+
+    // Block B's status is NOT automatically changed (Phase 0.3 does not
+    // cascade invalidation to descendants).
+    assert_eq!(sim.block_status(&block_b_id), Some(BlockStatus::UnderChallenge));
+
+    // But block B should NOT be the frontier, because its ancestor (A)
+    // is invalidated. The protocol recognizes this via is_on_valid_chain.
+    // The frontier should be cleared since no valid candidates remain.
+    assert!(sim.canonical_frontier(&domain_id).is_none());
+
+    // Verify is_on_valid_chain correctly identifies the tainted chain.
+    assert!(!sim.is_on_valid_chain(&block_b_id));
+    assert!(!sim.is_on_valid_chain(&block_a_id));
+}
+
+#[test]
+fn scenario_q_sibling_survives_parent_invalidation() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let parent = genesis_id.as_block_id();
+
+    // Two independent blocks off genesis.
+    let block_a = make_block(10, parent, domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, parent, domain_id, 0.03);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.03);
+
+    // Block B is frontier.
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+
+    // Invalidate block A — block B should be unaffected.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Block A invalidated, block B unaffected.
+    assert_eq!(sim.block_status(&block_a_id), Some(BlockStatus::Invalidated));
+    assert_eq!(sim.block_status(&block_b_id), Some(BlockStatus::UnderChallenge));
+
+    // Frontier should still be block B.
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+
+    // Block B is on a valid chain (its parent is genesis, not block A).
+    assert!(sim.is_on_valid_chain(&block_b_id));
+}
+
+#[test]
+fn scenario_q_cannot_submit_child_against_invalidated_parent() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate(&mut sim, block_a);
+
+    // Invalidate block A.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Try to submit a child against invalidated block A.
+    let block_b = make_block(11, block_a_id, domain_id, 0.02);
+    let result = sim.submit_block(block_b);
+
+    // Should fail because parent is not in accepted state.
+    assert!(result.is_err());
 }

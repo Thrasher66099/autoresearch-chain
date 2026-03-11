@@ -18,12 +18,15 @@
 //! Fork families, dominance evaluation, and frontier selection
 //! for AutoResearch Chain.
 //!
-//! # Phase 0.2 implementation
+//! # Phase 0.3 implementation
 //!
 //! - Fork family creation when sibling accepted blocks share a parent
 //! - Branch tip tracking
-//! - Simple dominance evaluation (best metric delta)
-//! - Canonical frontier update logic
+//! - Dominance evaluation using validated metrics (not claimed deltas)
+//! - Canonical frontier update logic using validated outcomes
+//! - Block invalidation handling: removal from branch tips, frontier,
+//!   and dominance when a block is proven invalid by upheld challenge
+//! - Frontier recomputation after invalidation
 
 use std::collections::HashMap;
 
@@ -78,9 +81,9 @@ pub struct DomainForkState {
     pub families: HashMap<ForkFamilyId, ForkFamily>,
     /// Map from parent block ID to the fork family that emerged from it.
     pub parent_to_family: HashMap<BlockId, ForkFamilyId>,
-    /// Current canonical frontier block (best accepted block).
+    /// Current canonical frontier block (best valid accepted block).
     pub canonical_frontier: Option<BlockId>,
-    /// Best known metric value at the frontier.
+    /// Best known validated metric value at the frontier.
     pub frontier_metric: Option<MetricValue>,
 }
 
@@ -154,10 +157,13 @@ impl DomainForkState {
         Ok(Some(family_id))
     }
 
-    /// Evaluate dominance for a fork family using a simple rule:
-    /// the branch tip with the highest cumulative metric delta wins.
+    /// Evaluate dominance for a fork family.
     ///
-    /// `tip_metrics` maps each branch tip to its cumulative metric value.
+    /// `tip_metrics` maps each branch tip to its validated metric value.
+    /// Only tips present in `tip_metrics` are considered — this allows
+    /// the caller to filter out invalidated or disputed blocks before
+    /// calling this method.
+    ///
     /// The direction (higher/lower is better) is provided by the caller
     /// based on the domain spec.
     ///
@@ -244,6 +250,52 @@ impl DomainForkState {
             true
         } else {
             false
+        }
+    }
+
+    /// Handle a block being invalidated by an upheld challenge.
+    ///
+    /// Removes the block from any fork family branch tips, clears
+    /// dominance if the invalidated block was the dominant tip,
+    /// and clears the frontier if the invalidated block was the
+    /// frontier.
+    ///
+    /// The caller is responsible for recomputing the frontier after
+    /// invalidation using [`recompute_frontier`].
+    pub fn on_block_invalidated(&mut self, block_id: BlockId) {
+        // Remove from branch tips in all families.
+        for family in self.families.values_mut() {
+            family.branch_tips.retain(|t| *t != block_id);
+            if family.dominant_branch_tip == Some(block_id) {
+                family.dominant_branch_tip = None;
+            }
+        }
+
+        // Clear frontier if it was the invalidated block.
+        if self.canonical_frontier == Some(block_id) {
+            self.canonical_frontier = None;
+            self.frontier_metric = None;
+        }
+    }
+
+    /// Recompute the canonical frontier from a set of valid block outcomes.
+    ///
+    /// Called after invalidation to find the next best frontier candidate.
+    /// Iterates all provided (block_id, metric_value) pairs and selects
+    /// the best one according to the metric direction.
+    ///
+    /// The caller is responsible for filtering out invalidated blocks
+    /// and blocks with invalidated ancestors before calling this method.
+    pub fn recompute_frontier(
+        &mut self,
+        valid_outcomes: impl Iterator<Item = (BlockId, MetricValue)>,
+        higher_is_better: bool,
+    ) {
+        self.canonical_frontier = None;
+        self.frontier_metric = None;
+
+        for (block_id, metric) in valid_outcomes {
+            self.maybe_update_frontier(block_id, metric, higher_is_better);
         }
     }
 }
@@ -423,5 +475,138 @@ mod tests {
             .record_accepted_block(&block, &[], || fid(1))
             .unwrap_err();
         matches!(err, ForkError::DomainMismatch { .. });
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 0.3: invalidation and frontier recomputation tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn invalidation_clears_frontier() {
+        let mut state = DomainForkState::new(
+            test_domain_id(1),
+            test_genesis_block_id(1).as_track_tree_id(),
+        );
+
+        state.maybe_update_frontier(test_block_id(10), MetricValue::new(0.95), true);
+        assert_eq!(state.canonical_frontier, Some(test_block_id(10)));
+
+        state.on_block_invalidated(test_block_id(10));
+        assert!(state.canonical_frontier.is_none());
+        assert!(state.frontier_metric.is_none());
+    }
+
+    #[test]
+    fn invalidation_removes_from_branch_tips() {
+        let mut state = DomainForkState::new(
+            test_domain_id(1),
+            test_genesis_block_id(1).as_track_tree_id(),
+        );
+
+        let block_a = make_accepted_block(10, 1, 1, 0.01);
+        let block_b = make_accepted_block(11, 1, 1, 0.05);
+
+        state.record_accepted_block(&block_a, &[], || fid(1)).unwrap();
+        state.record_accepted_block(&block_b, &[block_a.id], || fid(1)).unwrap();
+
+        let family = &state.families[&fid(1)];
+        assert_eq!(family.branch_tips.len(), 2);
+
+        state.on_block_invalidated(block_b.id);
+
+        let family = &state.families[&fid(1)];
+        assert_eq!(family.branch_tips.len(), 1);
+        assert!(family.branch_tips.contains(&block_a.id));
+        assert!(!family.branch_tips.contains(&block_b.id));
+    }
+
+    #[test]
+    fn invalidation_clears_dominance() {
+        let mut state = DomainForkState::new(
+            test_domain_id(1),
+            test_genesis_block_id(1).as_track_tree_id(),
+        );
+
+        let block_a = make_accepted_block(10, 1, 1, 0.01);
+        let block_b = make_accepted_block(11, 1, 1, 0.05);
+
+        state.record_accepted_block(&block_a, &[], || fid(1)).unwrap();
+        state.record_accepted_block(&block_b, &[block_a.id], || fid(1)).unwrap();
+
+        // Set block_b as dominant.
+        let mut metrics = HashMap::new();
+        metrics.insert(block_a.id, MetricValue::new(0.01));
+        metrics.insert(block_b.id, MetricValue::new(0.05));
+        state.evaluate_dominance(&fid(1), &metrics, true).unwrap();
+        assert_eq!(state.families[&fid(1)].dominant_branch_tip, Some(block_b.id));
+
+        // Invalidate the dominant block.
+        state.on_block_invalidated(block_b.id);
+        assert_eq!(state.families[&fid(1)].dominant_branch_tip, None);
+    }
+
+    #[test]
+    fn recompute_frontier_after_invalidation() {
+        let mut state = DomainForkState::new(
+            test_domain_id(1),
+            test_genesis_block_id(1).as_track_tree_id(),
+        );
+
+        // Set frontier to block 10 (best).
+        state.maybe_update_frontier(test_block_id(10), MetricValue::new(0.95), true);
+        state.maybe_update_frontier(test_block_id(11), MetricValue::new(0.92), true);
+        assert_eq!(state.canonical_frontier, Some(test_block_id(10)));
+
+        // Invalidate block 10.
+        state.on_block_invalidated(test_block_id(10));
+        assert!(state.canonical_frontier.is_none());
+
+        // Recompute from remaining valid blocks.
+        let remaining = vec![
+            (test_block_id(11), MetricValue::new(0.92)),
+        ];
+        state.recompute_frontier(remaining.into_iter(), true);
+        assert_eq!(state.canonical_frontier, Some(test_block_id(11)));
+    }
+
+    #[test]
+    fn dominance_filters_invalidated_tips() {
+        let mut state = DomainForkState::new(
+            test_domain_id(1),
+            test_genesis_block_id(1).as_track_tree_id(),
+        );
+
+        let block_a = make_accepted_block(10, 1, 1, 0.01);
+        let block_b = make_accepted_block(11, 1, 1, 0.05);
+
+        state.record_accepted_block(&block_a, &[], || fid(1)).unwrap();
+        state.record_accepted_block(&block_b, &[block_a.id], || fid(1)).unwrap();
+
+        // Invalidate block_b, then evaluate dominance.
+        // Only block_a's metric is provided (block_b filtered by caller).
+        state.on_block_invalidated(block_b.id);
+
+        let mut metrics = HashMap::new();
+        metrics.insert(block_a.id, MetricValue::new(0.01));
+        // block_b is not in metrics — caller excluded it.
+
+        let dominant = state.evaluate_dominance(&fid(1), &metrics, true).unwrap();
+        assert_eq!(dominant, Some(block_a.id));
+    }
+
+    #[test]
+    fn invalidation_of_non_frontier_block_preserves_frontier() {
+        let mut state = DomainForkState::new(
+            test_domain_id(1),
+            test_genesis_block_id(1).as_track_tree_id(),
+        );
+
+        state.maybe_update_frontier(test_block_id(10), MetricValue::new(0.95), true);
+        state.maybe_update_frontier(test_block_id(11), MetricValue::new(0.92), true);
+        assert_eq!(state.canonical_frontier, Some(test_block_id(10)));
+
+        // Invalidate block 11, which is NOT the frontier.
+        state.on_block_invalidated(test_block_id(11));
+        assert_eq!(state.canonical_frontier, Some(test_block_id(10)));
     }
 }

@@ -48,8 +48,14 @@ pub enum BlockStatus {
     Settled,
     /// Block is finalized and immutable.
     Final,
-    /// Block was rejected (failed validation or upheld challenge).
+    /// Block was rejected during validation (never reached accepted state).
     Rejected,
+    /// Block was invalidated after acceptance (upheld challenge).
+    ///
+    /// Distinct from Rejected: invalidated blocks were once provisionally
+    /// accepted and may have descendants. Rejected blocks never passed
+    /// validation.
+    Invalidated,
 }
 
 // ---------------------------------------------------------------------------

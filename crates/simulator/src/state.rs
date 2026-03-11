@@ -1,14 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Simulator state: the complete local protocol state and operations.
+//!
+//! # Phase 0.3 implementation
+//!
+//! The simulator composes all protocol engines into a single local
+//! deterministic state machine. Phase 0.3 adds:
+//!
+//! - Validated block outcomes (protocol truth, not claimed values)
+//! - Escrow record creation for accepted blocks
+//! - Challenge consequence semantics (upheld → invalidation + slash,
+//!   rejected → preserve state)
+//! - Frontier selection using validated metrics
+//! - Ancestor validity checking for frontier candidates
+//! - Frontier recomputation after block invalidation
 
 use std::collections::HashMap;
 
 use arc_protocol_types::{
     Block, BlockId, BlockStatus, ChallengeId, ChallengeRecord, ChallengeTarget,
-    ChallengeType, DomainId, EpochId, ForkFamilyId, GenesisBlock,
-    GenesisBlockId, MetricDirection, ParticipantId, TokenAmount,
-    ValidationAttestation, ArtifactHash,
+    ChallengeType, DomainId, EpochId, EscrowId, EscrowRecord, ForkFamilyId,
+    GenesisBlock, GenesisBlockId, MetricDirection, MetricValue, ParticipantId,
+    TokenAmount, ValidatedBlockOutcome, ValidationAttestation, ArtifactHash,
 };
 
 use arc_domain_engine::config::GenesisActivationConfig;
@@ -22,6 +35,7 @@ use arc_protocol_rules::config::ValidationConfig;
 use arc_protocol_rules::validator::{self, ValidatorPool};
 use arc_challenge_engine::ChallengeConfig;
 use arc_fork_engine::DomainForkState;
+use arc_reward_engine::RewardConfig;
 
 /// The complete local simulator state.
 ///
@@ -37,6 +51,8 @@ pub struct SimulatorState {
     pub validation_config: ValidationConfig,
     /// Challenge config.
     pub challenge_config: ChallengeConfig,
+    /// Reward/escrow config.
+    pub reward_config: RewardConfig,
     /// Domain registry (active domains, specs, track trees).
     pub domain_registry: DomainRegistry,
     /// In-progress genesis activations.
@@ -55,8 +71,17 @@ pub struct SimulatorState {
     pub fork_states: HashMap<DomainId, DomainForkState>,
     /// Active challenges.
     pub challenges: HashMap<ChallengeId, ChallengeRecord>,
+    /// Validated block outcomes — the protocol's truth about what validators
+    /// actually observed, as opposed to what proposers claimed.
+    pub validated_outcomes: HashMap<BlockId, ValidatedBlockOutcome>,
+    /// Escrow records for accepted blocks.
+    pub escrow_records: HashMap<EscrowId, EscrowRecord>,
+    /// Reverse index: block ID → escrow ID.
+    pub block_escrows: HashMap<BlockId, EscrowId>,
     /// Monotonic counter for generating unique fork family IDs.
     fork_family_counter: u64,
+    /// Monotonic counter for generating unique escrow IDs.
+    escrow_counter: u64,
     /// Metric direction per domain (cached from DomainSpec).
     pub metric_directions: HashMap<DomainId, MetricDirection>,
 }
@@ -68,6 +93,7 @@ impl SimulatorState {
             genesis_config: GenesisActivationConfig::default(),
             validation_config: ValidationConfig::default(),
             challenge_config: ChallengeConfig::default(),
+            reward_config: RewardConfig::default(),
             domain_registry: DomainRegistry::new(),
             pending_activations: HashMap::new(),
             blocks: HashMap::new(),
@@ -77,7 +103,11 @@ impl SimulatorState {
             children: HashMap::new(),
             fork_states: HashMap::new(),
             challenges: HashMap::new(),
+            validated_outcomes: HashMap::new(),
+            escrow_records: HashMap::new(),
+            block_escrows: HashMap::new(),
             fork_family_counter: 0,
+            escrow_counter: 0,
             metric_directions: HashMap::new(),
         }
     }
@@ -266,8 +296,6 @@ impl SimulatorState {
         let block_id = attestation.block_id;
 
         // Check block exists and is under validation.
-        // This is an orchestration check (not a state machine rule) since
-        // the attestation record is kept separately from block state.
         let block = self
             .blocks
             .get(&block_id)
@@ -313,17 +341,54 @@ impl SimulatorState {
 
         // If accepted, proceed through challenge window.
         if outcome == ProvisionalOutcome::Accepted {
-            self.on_block_accepted(block_id)?;
+            self.on_block_accepted(block_id, &summary)?;
         }
 
         Ok(outcome)
     }
 
-    /// Handle a block being accepted: open challenge window, update
-    /// fork state and frontier.
-    fn on_block_accepted(&mut self, block_id: &BlockId) -> Result<(), String> {
+    /// Handle a block being accepted: create validated outcome, escrow,
+    /// open challenge window, update fork state and frontier.
+    ///
+    /// Phase 0.3: uses validated metric value (mean observed delta from
+    /// attestations) rather than the proposer's claimed_metric_delta.
+    fn on_block_accepted(
+        &mut self,
+        block_id: &BlockId,
+        summary: &AttestationSummary,
+    ) -> Result<(), String> {
         let block = self.blocks.get(block_id).cloned()
             .ok_or_else(|| format!("block {} not found", block_id))?;
+
+        // Compute the validated metric value from attestation observations.
+        let validated_metric = MetricValue::new(
+            summary.mean_observed_delta.unwrap_or(block.claimed_metric_delta.as_f64()),
+        );
+
+        // Store the validated outcome (protocol truth).
+        self.validated_outcomes.insert(block.id, ValidatedBlockOutcome {
+            block_id: block.id,
+            validated_metric_value: validated_metric,
+            attestation_count: summary.total,
+            validation_epoch: self.current_epoch,
+        });
+
+        // Create escrow record for the proposer's bond.
+        self.escrow_counter += 1;
+        let mut escrow_bytes = [0u8; 32];
+        escrow_bytes[..8].copy_from_slice(&self.escrow_counter.to_le_bytes());
+        let escrow_id = EscrowId::from_bytes(escrow_bytes);
+
+        let escrow = arc_reward_engine::create_block_escrow(
+            escrow_id,
+            block.id,
+            ParticipantId::from_bytes(*block.proposer.as_bytes()),
+            block.bond,
+            self.current_epoch,
+            &self.reward_config,
+        );
+        self.escrow_records.insert(escrow_id, escrow);
+        self.block_escrows.insert(block.id, escrow_id);
 
         // Open challenge window.
         {
@@ -366,7 +431,7 @@ impl SimulatorState {
                 })
                 .map_err(|e| e.to_string())?;
 
-            // Update frontier if this block is better.
+            // Update frontier using VALIDATED metric value (not claimed delta).
             let higher_is_better = self
                 .metric_directions
                 .get(&domain_id)
@@ -375,7 +440,7 @@ impl SimulatorState {
 
             fork_state.maybe_update_frontier(
                 block.id,
-                block.claimed_metric_delta,
+                validated_metric,
                 higher_is_better,
             );
         }
@@ -395,13 +460,23 @@ impl SimulatorState {
         block_lifecycle::close_challenge_window(block).map_err(|e| e.to_string())
     }
 
-    /// Settle a block.
+    /// Settle a block and release its escrow.
     pub fn settle_block(&mut self, block_id: &BlockId) -> Result<(), String> {
         let block = self
             .blocks
             .get_mut(block_id)
             .ok_or_else(|| format!("block {} not found", block_id))?;
-        block_lifecycle::settle_block(block).map_err(|e| e.to_string())
+        block_lifecycle::settle_block(block).map_err(|e| e.to_string())?;
+
+        // Release the corresponding escrow.
+        if let Some(escrow_id) = self.block_escrows.get(block_id) {
+            if let Some(escrow) = self.escrow_records.get_mut(escrow_id) {
+                arc_reward_engine::release_escrow(escrow)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Finalize a block.
@@ -447,6 +522,161 @@ impl SimulatorState {
         Ok(id)
     }
 
+    /// Begin review of an open challenge.
+    pub fn begin_challenge_review(
+        &mut self,
+        challenge_id: &ChallengeId,
+    ) -> Result<(), String> {
+        let challenge = self
+            .challenges
+            .get_mut(challenge_id)
+            .ok_or_else(|| format!("challenge {} not found", challenge_id))?;
+        arc_challenge_engine::begin_review(challenge).map_err(|e| e.to_string())
+    }
+
+    /// Uphold a challenge: invalidate the target block and apply
+    /// protocol consequences.
+    ///
+    /// Phase 0.3 consequences:
+    /// - Target block status → Invalidated
+    /// - Block's escrow → Slashed
+    /// - Block removed from fork family branch tips
+    /// - Frontier recomputed if the invalidated block was the frontier
+    /// - Dominance cleared if the invalidated block was the dominant tip
+    ///
+    /// Descendant blocks are not automatically invalidated in Phase 0.3,
+    /// but they are excluded from frontier consideration because
+    /// `is_on_valid_chain` checks for invalidated ancestors.
+    pub fn uphold_challenge(
+        &mut self,
+        challenge_id: &ChallengeId,
+    ) -> Result<(), String> {
+        // Transition challenge to Upheld.
+        let challenge = self
+            .challenges
+            .get_mut(challenge_id)
+            .ok_or_else(|| format!("challenge {} not found", challenge_id))?;
+        arc_challenge_engine::uphold_challenge(challenge)
+            .map_err(|e| e.to_string())?;
+
+        // Identify the target block.
+        let target_block_id = match &challenge.target {
+            ChallengeTarget::Block { block_id } => *block_id,
+            ChallengeTarget::Attestation { block_id, .. } => *block_id,
+            ChallengeTarget::Attribution { block_id, .. } => *block_id,
+            ChallengeTarget::DominanceDecision { .. } => {
+                // Dominance challenges don't invalidate a specific block.
+                return Ok(());
+            }
+        };
+
+        // Invalidate the target block.
+        let block = self
+            .blocks
+            .get_mut(&target_block_id)
+            .ok_or_else(|| format!("target block {} not found", target_block_id))?;
+        let domain_id = block.domain_id;
+        block_lifecycle::invalidate_block(block)
+            .map_err(|e| e.to_string())?;
+
+        // Slash the block's escrow.
+        if let Some(escrow_id) = self.block_escrows.get(&target_block_id) {
+            if let Some(escrow) = self.escrow_records.get_mut(escrow_id) {
+                arc_reward_engine::slash_escrow(escrow)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        // Remove from validated outcomes (invalidated blocks are no longer
+        // protocol truth for frontier purposes).
+        self.validated_outcomes.remove(&target_block_id);
+
+        // Compute valid frontier candidates before mutating fork state,
+        // to satisfy the borrow checker (valid_frontier_candidates borrows
+        // self.blocks and self.validated_outcomes immutably).
+        let higher_is_better = self
+            .metric_directions
+            .get(&domain_id)
+            .map(|d| *d == MetricDirection::HigherBetter)
+            .unwrap_or(true);
+        let valid_candidates = self.valid_frontier_candidates(&domain_id);
+
+        // Update fork state: remove from branch tips, clear dominance/frontier.
+        if let Some(fork_state) = self.fork_states.get_mut(&domain_id) {
+            fork_state.on_block_invalidated(target_block_id);
+            fork_state.recompute_frontier(valid_candidates.into_iter(), higher_is_better);
+        }
+
+        Ok(())
+    }
+
+    /// Reject a challenge: the target block is preserved, the challenger
+    /// loses their bond (bond distribution deferred to later phases).
+    pub fn reject_challenge(
+        &mut self,
+        challenge_id: &ChallengeId,
+    ) -> Result<(), String> {
+        let challenge = self
+            .challenges
+            .get_mut(challenge_id)
+            .ok_or_else(|| format!("challenge {} not found", challenge_id))?;
+        arc_challenge_engine::reject_challenge(challenge)
+            .map_err(|e| e.to_string())
+    }
+
+    // -----------------------------------------------------------------------
+    // Validity helpers
+    // -----------------------------------------------------------------------
+
+    /// Check whether a block is on a valid chain (no invalidated ancestors).
+    ///
+    /// Walks up the parent chain from the given block. Returns false if
+    /// any ancestor (including the block itself) has status Invalidated.
+    /// Terminates at genesis blocks (which are not stored in self.blocks).
+    pub fn is_on_valid_chain(&self, block_id: &BlockId) -> bool {
+        let mut current = *block_id;
+        loop {
+            let Some(block) = self.blocks.get(&current) else {
+                // Reached a genesis block or unknown parent — valid chain end.
+                return true;
+            };
+            if block.status == BlockStatus::Invalidated {
+                return false;
+            }
+            current = block.parent_id;
+        }
+    }
+
+    /// Gather all valid frontier candidates for a domain.
+    ///
+    /// Returns (block_id, validated_metric_value) pairs for blocks that:
+    /// - Belong to the specified domain
+    /// - Have a validated outcome recorded
+    /// - Are not themselves invalidated or rejected
+    /// - Have no invalidated ancestors in their chain
+    fn valid_frontier_candidates(
+        &self,
+        domain_id: &DomainId,
+    ) -> Vec<(BlockId, MetricValue)> {
+        self.validated_outcomes
+            .iter()
+            .filter(|(bid, _)| {
+                self.blocks
+                    .get(bid)
+                    .map(|b| {
+                        b.domain_id == *domain_id
+                            && !matches!(
+                                b.status,
+                                BlockStatus::Rejected | BlockStatus::Invalidated
+                            )
+                            && self.is_on_valid_chain(bid)
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|(bid, outcome)| (*bid, outcome.validated_metric_value))
+            .collect()
+    }
+
     // -----------------------------------------------------------------------
     // Query helpers
     // -----------------------------------------------------------------------
@@ -482,6 +712,24 @@ impl SimulatorState {
         self.attestations
             .get(block_id)
             .map(|atts| attestation::aggregate_attestations(atts))
+    }
+
+    /// Get the validated outcome for a block.
+    pub fn validated_outcome(
+        &self,
+        block_id: &BlockId,
+    ) -> Option<&ValidatedBlockOutcome> {
+        self.validated_outcomes.get(block_id)
+    }
+
+    /// Get the escrow record for a block.
+    pub fn block_escrow(
+        &self,
+        block_id: &BlockId,
+    ) -> Option<&EscrowRecord> {
+        self.block_escrows
+            .get(block_id)
+            .and_then(|eid| self.escrow_records.get(eid))
     }
 }
 

@@ -121,7 +121,11 @@ pub fn finalize_block(block: &mut Block) -> Result<(), ProtocolError> {
     Ok(())
 }
 
-/// Reject a block (can happen from multiple states).
+/// Reject a block during validation (can happen from multiple pre-settlement states).
+///
+/// Rejection means the block never reached a valid accepted state.
+/// For blocks that were accepted but subsequently proven invalid by a
+/// challenge, use [`invalidate_block`] instead.
 pub fn reject_block(block: &mut Block) -> Result<(), ProtocolError> {
     match block.status {
         BlockStatus::Submitted
@@ -135,6 +139,31 @@ pub fn reject_block(block: &mut Block) -> Result<(), ProtocolError> {
             block_id: block.id,
             from: block.status,
             to: BlockStatus::Rejected,
+        }),
+    }
+}
+
+/// Invalidate a previously accepted block due to an upheld challenge.
+///
+/// Distinct from rejection: rejected blocks never passed validation,
+/// while invalidated blocks were provisionally accepted but subsequently
+/// proven invalid through the challenge mechanism.
+///
+/// Can be called from accepted states: ValidationComplete, UnderChallenge,
+/// ChallengeWindowClosed. Cannot invalidate Settled or Final blocks
+/// (economic finality prevents this in Phase 0.3).
+pub fn invalidate_block(block: &mut Block) -> Result<(), ProtocolError> {
+    match block.status {
+        BlockStatus::ValidationComplete
+        | BlockStatus::UnderChallenge
+        | BlockStatus::ChallengeWindowClosed => {
+            block.status = BlockStatus::Invalidated;
+            Ok(())
+        }
+        _ => Err(ProtocolError::InvalidBlockTransition {
+            block_id: block.id,
+            from: block.status,
+            to: BlockStatus::Invalidated,
         }),
     }
 }
@@ -289,5 +318,69 @@ mod tests {
         let block = valid_block();
         let config = default_config();
         assert!(check_block_bond(&block, &config).is_ok());
+    }
+
+    #[test]
+    fn invalidate_from_under_challenge() {
+        let mut block = valid_block();
+        let config = default_config();
+        begin_validation(&mut block).unwrap();
+        complete_validation(&mut block, ProvisionalOutcome::Accepted, &config).unwrap();
+        open_challenge_window(&mut block).unwrap();
+        assert_eq!(block.status, BlockStatus::UnderChallenge);
+
+        invalidate_block(&mut block).unwrap();
+        assert_eq!(block.status, BlockStatus::Invalidated);
+    }
+
+    #[test]
+    fn invalidate_from_challenge_window_closed() {
+        let mut block = valid_block();
+        let config = default_config();
+        begin_validation(&mut block).unwrap();
+        complete_validation(&mut block, ProvisionalOutcome::Accepted, &config).unwrap();
+        open_challenge_window(&mut block).unwrap();
+        close_challenge_window(&mut block).unwrap();
+
+        invalidate_block(&mut block).unwrap();
+        assert_eq!(block.status, BlockStatus::Invalidated);
+    }
+
+    #[test]
+    fn cannot_invalidate_settled() {
+        let mut block = valid_block();
+        let config = default_config();
+        begin_validation(&mut block).unwrap();
+        complete_validation(&mut block, ProvisionalOutcome::Accepted, &config).unwrap();
+        open_challenge_window(&mut block).unwrap();
+        close_challenge_window(&mut block).unwrap();
+        settle_block(&mut block).unwrap();
+
+        assert!(invalidate_block(&mut block).is_err());
+    }
+
+    #[test]
+    fn cannot_invalidate_finalized() {
+        let mut block = valid_block();
+        let config = default_config();
+        begin_validation(&mut block).unwrap();
+        complete_validation(&mut block, ProvisionalOutcome::Accepted, &config).unwrap();
+        open_challenge_window(&mut block).unwrap();
+        close_challenge_window(&mut block).unwrap();
+        settle_block(&mut block).unwrap();
+        finalize_block(&mut block).unwrap();
+
+        assert!(invalidate_block(&mut block).is_err());
+    }
+
+    #[test]
+    fn cannot_invalidate_submitted() {
+        let mut block = valid_block();
+        assert!(invalidate_block(&mut block).is_err());
+    }
+
+    #[test]
+    fn invalidated_block_is_not_accepted() {
+        assert!(!is_block_accepted(BlockStatus::Invalidated));
     }
 }
