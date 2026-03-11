@@ -4,20 +4,21 @@
 
 ## Purpose
 
-This document defines the initial technical implementation plan for AutoResearch Chain.
+This document defines the technical implementation plan for AutoResearch Chain.
 
 It is intentionally practical rather than aspirational.
 
-The goal is not to freeze the architecture permanently before implementation begins.
+The goal is not to freeze the architecture permanently.
 The goal is to define:
 
 - the chosen architectural direction,
 - the core subsystem split,
-- the recommended build order,
-- the first implementation milestones,
+- the build order,
+- the implementation milestones and their current status,
 - and the major engineering questions that should stay active during development.
 
 This is a living implementation plan for a protocol that is still evolving.
+It was originally written before any code existed and has been revised to reflect the experience of implementing Phase 0.
 
 ---
 
@@ -69,6 +70,8 @@ Responsibilities:
 
 This is the most important layer in the system.
 
+**Status:** Core subsystems implemented and tested (protocol-types, protocol-rules, domain-engine, fork-engine, challenge-engine, reward-engine, simulator). See Current Status below.
+
 ---
 
 ### Layer B — Research Execution Layer (Python)
@@ -87,6 +90,8 @@ Responsibilities:
 This layer is off-chain but protocol-coupled.
 
 It should integrate naturally with autoresearch-style loops.
+
+**Status:** No Python code exists yet. This is a Phase 2 target.
 
 ---
 
@@ -139,11 +144,44 @@ The first target is:
 
 **a local deterministic Rust implementation of the protocol state machine**
 
-The first major question is:
+The first major question was:
 
 > Does the game behave correctly when represented as executable state transitions?
 
-That is the right place to start.
+That question has been substantially answered. The protocol state machine runs deterministically in the simulator, covering domain activation, block lifecycle, validation, challenge, fork competition, frontier settlement, and escrow management. The simulator-first approach proved its value: implementation exposed real design issues that would have been invisible in specification alone — proposer-fallback metric truth (the protocol was implicitly trusting proposer-claimed deltas), silent direction assumptions in metric comparisons, and acceptance of non-truth-bearing attestations (Pass votes without observed data).
+
+The question now is whether the protocol survives adversarial pressure and whether real useful-work runners can connect to it.
+
+---
+
+## Current Status
+
+Phase 0 is substantially complete. The Rust workspace contains 10 crates (~9,800 lines of code, 231 tests). The core protocol state machine runs deterministically in the simulator, composing all engines through integrated scenario tests.
+
+### Crate status
+
+| Crate | Status | Notes |
+|-------|--------|-------|
+| `protocol-types` | Implemented | Full type vocabulary, structural validation, serde, test fixtures |
+| `protocol-rules` | Implemented | Attestation aggregation (truth-bearing), block lifecycle state machine, validator assignment |
+| `domain-engine` | Implemented | Genesis activation state machine, RTS-1 conformance, domain registry |
+| `fork-engine` | Implemented | Fork families, metric-based dominance, frontier selection, invalidation handling |
+| `challenge-engine` | Partial | State machine implemented; economics, escalation, remedy application deferred |
+| `reward-engine` | Partial | Escrow create/release/slash implemented; staged rewards, attribution distribution deferred |
+| `simulator` | Implemented | Integrated state machine composing all engines; 51 scenario tests |
+| `storage-model` | Stub | Reference/hash model not yet defined |
+| `node` | Stub | Phase 1 target |
+| `cli` | Stub | Phase 1 target |
+
+### Protocol-truth hardening
+
+The Phase 0 implementation established several protocol-truth invariants that were not fully articulated in the original specification:
+
+- Protocol truth is derived exclusively from validator-observed data, never from proposer claims.
+- Invalidated and Rejected block semantics are properly separated (upheld challenge vs. failed validation).
+- `DerivedValidity` serves as a centralized truth surface for all downstream logic (`DirectValid`, `DirectInvalid`, `AncestryInvalid`).
+- Escrow release is gated on both epoch timing and branch validity.
+- Truth-bearing attestation semantics: a Pass vote without `observed_delta` does not count toward acceptance.
 
 ---
 
@@ -159,62 +197,82 @@ Turn the protocol spec into executable Rust types and transitions.
 
 The protocol core should define at minimum:
 
-- `ProblemDomain`
-- `DomainSpec`
-- `ResearchTrackStandard`
-- `GenesisBlock`
-- `TrackInitialization`
-- `TrackTree`
-- `EpochSpec`
-- `Block`
-- `ForkFamily`
-- `ValidationAttestation`
-- `ChallengeRecord`
-- `AttributionClaim`
-- `CanonicalFrontierState`
-- `MaterializedState`
-- `CodebaseStateRef`
-- `EscrowRecord`
-- `MetricIntegrityPolicy`
-- `DatasetIntegrityPolicy`
+- `ProblemDomain` — **done**
+- `DomainSpec` — **done**
+- `ResearchTrackStandard` — **done**
+- `GenesisBlock` — **done**
+- `TrackInitialization` — **done**
+- `TrackTree` — **done**
+- `EpochSpec` — **done**
+- `Block` — **done**
+- `ForkFamily` — **done**
+- `ValidationAttestation` — **done**
+- `ChallengeRecord` — **done**
+- `AttributionClaim` — **done**
+- `CanonicalFrontierState` — **done**
+- `MaterializedState` — **done** (type defined; storage-model resolution not implemented)
+- `CodebaseStateRef` — **done** (type defined; storage-model resolution not implemented)
+- `EscrowRecord` — **done**
+- `MetricIntegrityPolicy` — **done**
+- `DatasetIntegrityPolicy` — **done**
+
+Types created beyond the original list:
+
+- `DerivedValidity` — centralized truth surface for branch validity (`DirectValid`, `DirectInvalid`, `AncestryInvalid`)
+- `ValidatedBlockOutcome` — protocol-truth record of validator-observed metrics per block
+- `AttestationSummary` — aggregated attestation counts, truth-bearing pass count, median delta
+- `ProvisionalOutcome` — provisional acceptance/rejection/inconclusive decision
+- `MaterializationPolicyKind` — trigger categories for frontier materialization
+- `DatasetSplits` — structured train/test/validation dataset partitioning
 
 And core logic for:
 
-- domain creation
-- track activation
-- seed-score verification state
-- block submission
-- validator assignment
-- attestation aggregation
-- challenge opening and resolution
-- fork activation and dominance
-- frontier settlement
-- reward staging
-- slashing outcomes
-- cross-domain integration
-- successor-track creation
+- domain creation — **done**
+- track activation — **done** (full genesis state machine with RTS-1 conformance)
+- seed-score verification state — **done** (structurally embedded in genesis validation)
+- block submission — **done** (structural validation, policy checks, parent lineage)
+- validator assignment — **done** (deterministic hash-based pool assignment)
+- attestation aggregation — **done** (truth-bearing semantics, median delta, provisional outcome)
+- challenge opening and resolution — **done** (state machine; economics and remedy deferred)
+- fork activation and dominance — **done** (fork families, metric-based dominance, derived validity filtering)
+- frontier settlement — **done** (validity-aware frontier selection with invalidation recomputation)
+- reward staging — **partial** (escrow create/release/slash implemented; staged multi-epoch release deferred)
+- slashing outcomes — **done** (escrow slashing on upheld challenges)
+- cross-domain integration — **not started**
+- successor-track creation — **not started**
 
 ### Success condition
 
 A local simulator can model:
 
-- genesis proposal
-- track activation
-- block submission
-- validation outcomes
-- challenge outcomes
-- fork competition
-- frontier updates
-- reward accounting
-- domain-local and cross-domain behavior
+- genesis proposal — **done**
+- track activation — **done**
+- block submission — **done**
+- validation outcomes — **done**
+- challenge outcomes — **done**
+- fork competition — **done**
+- frontier updates — **done**
+- reward accounting — **partial** (escrow lifecycle works; staged attribution deferred)
+- domain-local and cross-domain behavior — **partial** (domain-local works; cross-domain effects not implemented)
 
 without any real networking.
 
-This phase should be heavily test-driven.
+This phase should be heavily test-driven. It has been: 231 tests cover the protocol core.
+
+### Phase 0 — Remaining Work
+
+1. Challenge economics and escalation (bond distribution, remedy application, escalation to governance)
+2. Staged reward release (multi-stage escrow, attribution-weighted distribution)
+3. Storage-model: content-addressed references, artifact metadata, materialization triggers
+4. Successor-track creation and metric migration
+5. Cross-domain integration effects
+6. Reproducibility tolerance model (formalized thresholds beyond configurable parameters)
 
 ---
 
 ## Phase 1 — Local Single-Node Runtime
+
+**Status:** Not started. Stub binaries exist in workspace (`node`, `cli`). Phase 0 dependency is now substantially met.
 
 ### Goal
 
@@ -282,6 +340,8 @@ This is the first point at which the protocol and useful-work layer truly connec
 
 ## Phase 3 — Artifact Layer and Frontier Materialization
 
+**Status:** Not started. The type-level foundation exists (`MaterializedState`, `CanonicalFrontierState`, `CodebaseStateRef`, `MaterializationPolicyKind`). The `storage-model` crate stub maps to these deliverables.
+
 ### Goal
 
 Make the protocol usable as a real research substrate.
@@ -310,6 +370,8 @@ This is essential to make the chain more than a ledger of diffs.
 ---
 
 ## Phase 4 — Multi-Actor Simulation and Adversarial Testing
+
+**Status:** Not started as a dedicated phase. The simulator already covers some adversarial scenarios at unit/integration level (fork competition, invalidation cascades, ancestry poisoning, truth-bearing attestation filtering). Phase 4 is about sustained multi-actor economic stress testing.
 
 ### Goal
 
@@ -378,47 +440,47 @@ At this point, the protocol becomes a real decentralized system rather than just
 
 ---
 
-## Recommended Repository Architecture
+## Repository Architecture
 
-The implementation should be organized around clear subsystem boundaries.
+The implementation is organized around clear subsystem boundaries.
 
 ### Rust
 
-Suggested crate layout:
+Crate layout:
 
 - `crates/protocol-types/`
-  - core structs, enums, IDs, hashes, references
+  - core structs, enums, IDs, hashes, references, structural validation, serde, test fixtures
 
 - `crates/protocol-rules/`
-  - deterministic state transition logic
+  - attestation aggregation (truth-bearing semantics), block lifecycle state machine, validator assignment, configuration
 
 - `crates/domain-engine/`
-  - domains, standards, genesis activation, track trees
+  - genesis activation state machine, RTS-1 conformance checking, domain registry, track trees
 
 - `crates/fork-engine/`
-  - fork families, dominance, frontier selection
+  - fork families, metric-based dominance evaluation, frontier selection, invalidation handling, derived validity filtering
 
 - `crates/challenge-engine/`
-  - challenge types, resolution rules, remedies
+  - challenge state machine, target validation, bond checks (economics and remedy deferred)
 
 - `crates/reward-engine/`
-  - staged rewards, escrows, slashing, domain-local accounting
+  - escrow create/release/slash, epoch-gated release timing (staged rewards and attribution deferred)
 
 - `crates/storage-model/`
-  - references, artifact metadata, materialized state references
+  - references, artifact metadata, materialized state references (stub — not yet implemented)
 
 - `crates/simulator/`
-  - local protocol simulator and scenario engine
+  - integrated protocol state machine composing all engines, scenario test harness
 
 - `crates/node/`
-  - minimal local runtime / future node executable
+  - minimal local runtime / future node executable (stub — Phase 1 target)
 
 - `crates/cli/`
-  - command-line interface
+  - command-line interface (stub — Phase 1 target)
 
 ### Python
 
-Suggested layout:
+Planned layout (not yet implemented):
 
 - `python/arc_runner/`
   - shared protocol client logic
@@ -461,25 +523,33 @@ Suggested layout:
 
 The following items should be implemented before broader infrastructure work.
 
-### 1. Domain and Genesis Activation
+### 1. Domain and Genesis Activation — Done
 
 The chain must not remain implicitly tied to one domain.
 Genesis and track activation logic should be among the first things implemented.
 
-### 2. Base Block / Validation / Challenge Loop
+Full genesis activation state machine implemented with RTS-1 conformance checking.
+
+### 2. Base Block / Validation / Challenge Loop — Done
 
 The core game loop must work in one domain before broadening.
 
-### 3. Multi-Domain Support
+Block submission, validation (truth-bearing attestation aggregation), challenge lifecycle, fork competition, frontier settlement, and escrow management all implemented in the simulator.
+
+### 3. Multi-Domain Support — Partial
 
 The protocol should support multiple domains early enough that it does not ossify around a single benchmark.
 
-### 4. Canonical Frontier Materialization
+Domain independence works (domain registry, per-domain fork state, domain-scoped block lineage). Cross-domain integration effects are not yet implemented.
+
+### 4. Canonical Frontier Materialization — Not done
 
 Users must be able to pull the current best assembled state.
 This is essential to the protocol's practical usability.
 
-### 5. Python Runner Integration
+The frontier types exist (`CanonicalFrontierState`, `MaterializedState`, `CodebaseStateRef`). The `storage-model` crate that would resolve references into pullable artifacts is a stub.
+
+### 5. Python Runner Integration — Not done
 
 The chain becomes real only when it can actually receive useful work from autonomous agent loops and replay workers.
 
@@ -490,7 +560,7 @@ The chain becomes real only when it can actually receive useful work from autono
 Not every design choice needs to be final now.
 But several should be decided relatively early.
 
-### Canonical Serialization
+### Canonical Serialization — Partially locked
 
 The protocol needs canonical formats for:
 
@@ -503,7 +573,9 @@ The protocol needs canonical formats for:
 
 Without canonical serialization, hashing and replay become fragile.
 
-### Reference and Hash Model
+Serde JSON serialization is implemented for all protocol types. A canonical binary format for hashing (deterministic byte-level representation) has not yet been chosen.
+
+### Reference and Hash Model — Partially locked
 
 The protocol needs a clean model for how it references:
 
@@ -516,7 +588,9 @@ The protocol needs a clean model for how it references:
 
 This should be explicit and stable early.
 
-### Reproducibility Tolerance Model
+`ArtifactHash` is defined as the type-level reference primitive. Resolution of references into retrievable artifacts is not yet implemented (storage-model stub).
+
+### Reproducibility Tolerance Model — Partially locked
 
 The protocol must define:
 
@@ -525,7 +599,9 @@ The protocol must define:
 - attestation aggregation thresholds
 - inconclusive conditions
 
-### Materialization Policy
+Configurable thresholds exist in `ProtocolConfig` (acceptance threshold, pass threshold). A broader model covering cross-run variance and environment-dependent tolerance is not yet formalized.
+
+### Materialization Policy — Partially locked
 
 The protocol must define when a frontier or chain of diffs becomes a materialized state.
 
@@ -536,10 +612,22 @@ Potential triggers include:
 - scheduled checkpoint
 - domain policy rule
 
-### Domain Activation Lifecycle
+`MaterializationPolicyKind` enum exists with these trigger categories. Actual trigger evaluation and materialization execution are not yet implemented.
+
+### Domain Activation Lifecycle — Done
 
 The protocol now explicitly includes genesis and track creation.
 Those state transitions should be implemented early as first-class logic, not bolted on later.
+
+Full state machine implemented: Proposed → ConformanceChecking → ValidationInProgress → ActivationPending → Active/Failed/Expired, with RTS-1 conformance checking.
+
+### Derived Validity Model — Locked during implementation
+
+`DerivedValidity` enum (`DirectValid`, `DirectInvalid`, `AncestryInvalid`) serves as the centralized truth surface for all downstream decisions about whether a block's branch is viable. Fork dominance evaluation, frontier selection, and escrow release all gate on derived validity.
+
+### Protocol Truth Source — Locked during implementation
+
+Protocol truth is derived exclusively from validator-observed data. Proposer-claimed metrics are recorded but never used for acceptance, dominance, or frontier decisions. `ValidatedBlockOutcome` captures the validator-observed metric values that the protocol treats as ground truth.
 
 ---
 
@@ -561,25 +649,30 @@ These may matter later, but they are not the current bottleneck.
 
 The current bottleneck is:
 
-**Does the research-market protocol behave coherently when executed?**
+**Can the protocol survive adversarial pressure, and can real useful-work runners connect to it?**
 
 ---
 
 ## First Major Deliverable
 
-The first major engineering deliverable should be:
+The original first major deliverable was:
 
 **A local protocol simulator with real domain/genesis/block/validation/challenge/fork/frontier logic and Python runner hooks**
 
-This is the inflection point where the project becomes more than a white paper.
+This is substantially achieved. The simulator implements domain activation, block lifecycle, validation with truth-bearing attestations, challenge lifecycle, fork competition with metric-based dominance, frontier settlement with derived validity filtering, and escrow management. Python runner hooks remain the outstanding piece.
 
-If this works, the team will have:
+What the implementation produced:
 
-- executable protocol logic
-- adversarial testability
-- a place to discover spec contradictions
-- a base for real runner integration
-- a foundation for a future networked chain
+- executable protocol logic that matches and refines the spec
+- adversarial testability (231 tests, including invalidation cascades and ancestry poisoning)
+- spec contradiction discovery (proposer-truth fallback, silent metric direction, non-truth-bearing attestation acceptance)
+- a foundation for all subsequent phases
+
+### Next major deliverable
+
+**A local end-to-end research loop: the hardened protocol simulator, a minimal node runtime with persistence, one real RTS-1 domain, and Python proposer/validator/challenger runner hooks.**
+
+This connects the protocol to actual useful work for the first time.
 
 ---
 
@@ -587,14 +680,21 @@ If this works, the team will have:
 
 These questions should stay active during implementation:
 
-- how strict should genesis activation thresholds be?
-- how should artifact references be structured?
-- how often should frontier states be materialized?
-- how should challenge escalation be encoded in v0?
-- how should domain-local reward accounting be represented internally?
-- how should successor tracks and metric migration work in code?
-- how formulaic should attribution be in early versions?
-- how much replay metadata must be mandatory at protocol level versus runner level?
+- how strict should genesis activation thresholds be? — **partially resolved.** Configurable thresholds exist; real-world calibration requires testnet data.
+- how should artifact references be structured? — **type-level resolved** (`ArtifactHash`); resolution model not yet implemented.
+- how often should frontier states be materialized? — **still open.** `MaterializationPolicyKind` enumerates trigger categories but policy evaluation is not implemented.
+- how should challenge escalation be encoded in v0? — **still open.** Basic challenge state machine works; escalation path and governance interaction are deferred.
+- how should domain-local reward accounting be represented internally? — **partially resolved.** Per-block escrow works; attribution-weighted distribution across contributors is deferred.
+- how should successor tracks and metric migration work in code? — **still open.**
+- how formulaic should attribution be in early versions? — **still open.** `AttributionClaim` and `AttributionType` exist as types but no distribution logic is implemented.
+- how much replay metadata must be mandatory at protocol level versus runner level? — **still open.** `EvidenceBundle` captures references; the boundary between protocol-mandatory and runner-optional metadata is not yet drawn.
+
+Questions that emerged during implementation:
+
+- How should deep-history invalidation interact with settlement finality? An upheld challenge invalidates a block and poisons its descendants, but if descendants have already settled, the cascade creates retroactive state changes.
+- What is the gap between structural validation (types are correct, lineage exists) and data availability checking (the referenced artifacts can actually be fetched)?
+- How should cross-domain effects work when domains share participants but have independent fork competition?
+- How do escrow economics behave under sustained fork competition, where multiple competing branches each hold escrows?
 
 These are not reasons to delay implementation.
 They are reasons to build in a way that allows change.
@@ -603,29 +703,23 @@ They are reasons to build in a way that allows change.
 
 ## Near-Term Development Sequence
 
-The most practical short-term sequence is:
+### Completed
 
-### Step 1
-Implement Rust protocol types and genesis/domain activation logic.
+**Step 1** — Implemented Rust protocol types and genesis/domain activation logic.
 
-### Step 2
-Implement the single-domain research loop:
-- block
-- attestation
-- challenge
-- fork
-- frontier settlement
+**Step 2** — Implemented the single-domain research loop: block, attestation, challenge, fork, frontier settlement, escrow management.
 
-### Step 3
-Generalize to multi-domain support and domain-scoped accounting.
+### In progress
 
-### Step 4
-Implement canonical frontier materialization and pull logic.
+**Step 3** — Generalizing to multi-domain support and domain-scoped accounting. Domain independence works; cross-domain effects not yet implemented.
 
-### Step 5
-Integrate Python proposer and validator runners.
+### Forward sequence
 
-This is the order most likely to produce useful learning quickly.
+1. Complete Phase 0 remaining items: challenge economics, staged rewards, storage-model references, successor-track creation, cross-domain effects.
+2. Implement local single-node runtime (Phase 1): persistence, transaction flow, state queries, CLI.
+3. Implement Python runner integration (Phase 2): proposer, validator, challenger connecting to local runtime.
+4. Implement frontier materialization and artifact resolution (Phase 3).
+5. Run sustained adversarial simulations (Phase 4, can overlap with Phase 2/3).
 
 ---
 
