@@ -2,7 +2,7 @@
 
 //! Simulator state: the complete local protocol state and operations.
 //!
-//! # Phase 0.3 implementation
+//! # Phase 0.3 / 0.3d implementation
 //!
 //! The simulator composes all protocol engines into a single local
 //! deterministic state machine. Phase 0.3 adds:
@@ -14,15 +14,24 @@
 //! - Frontier selection using validated metrics
 //! - Ancestor validity checking for frontier candidates
 //! - Frontier recomputation after block invalidation
+//!
+//! Phase 0.3d adds explicit derived branch validity:
+//!
+//! - `DerivedValidity` enum: `DirectValid`, `DirectInvalid`, `AncestryInvalid`
+//! - Centralized `derived_validity()` method as the truth surface
+//! - Frontier candidacy gated on `DirectValid`
+//! - Dominance evaluation filtered by derived validity
+//! - Settlement gated on `DirectValid` (ancestry-poisoned blocks cannot settle)
+//! - Escrow release prevented for non-`DirectValid` blocks via settlement gate
 
 use std::collections::HashMap;
 
 use arc_protocol_types::{
     Block, BlockId, BlockStatus, ChallengeId, ChallengeRecord, ChallengeTarget,
-    ChallengeType, DomainId, EpochId, EscrowId, EscrowRecord, EscrowStatus,
-    ForkFamilyId, GenesisBlock, GenesisBlockId, MetricDirection, MetricValue,
-    ParticipantId, TokenAmount, ValidatedBlockOutcome, ValidationAttestation,
-    ArtifactHash,
+    ChallengeType, DerivedValidity, DomainId, EpochId, EscrowId, EscrowRecord,
+    EscrowStatus, ForkFamilyId, GenesisBlock, GenesisBlockId, MetricDirection,
+    MetricValue, ParticipantId, TokenAmount, ValidatedBlockOutcome,
+    ValidationAttestation, ArtifactHash,
 };
 
 use arc_domain_engine::config::GenesisActivationConfig;
@@ -484,11 +493,37 @@ impl SimulatorState {
 
     /// Settle a block and release its escrow.
     ///
+    /// Settlement is gated on derived branch validity (Phase 0.3d):
+    /// only blocks with `DerivedValidity::DirectValid` may settle.
+    /// Blocks that are `DirectInvalid` or `AncestryInvalid` cannot settle
+    /// and must not receive escrow release.
+    ///
     /// Escrow release respects the release_epoch: the current epoch must
     /// be at or past the escrow's release_epoch (challenge survival boundary).
-    /// The escrow timing check is performed before the block status
-    /// transition to avoid inconsistent state on failure.
+    /// The derived validity and escrow timing checks are performed before
+    /// the block status transition to avoid inconsistent state on failure.
     pub fn settle_block(&mut self, block_id: &BlockId) -> Result<(), String> {
+        // Phase 0.3d: derived branch validity gate.
+        // A block with poisoned ancestry must not settle, even if its
+        // own stored status would otherwise permit it.
+        let validity = self.derived_validity(block_id);
+        match validity {
+            DerivedValidity::DirectValid => {}
+            DerivedValidity::DirectInvalid => {
+                return Err(format!(
+                    "cannot settle block {}: block is directly invalidated",
+                    block_id
+                ));
+            }
+            DerivedValidity::AncestryInvalid => {
+                return Err(format!(
+                    "cannot settle block {}: block has invalidated ancestry \
+                     (derived validity: AncestryInvalid)",
+                    block_id
+                ));
+            }
+        }
+
         // Pre-check: verify escrow release timing before mutating block status.
         // This prevents the block from transitioning to Settled while the
         // escrow cannot be released yet.
@@ -675,35 +710,66 @@ impl SimulatorState {
     }
 
     // -----------------------------------------------------------------------
-    // Validity helpers
+    // Derived branch validity (Phase 0.3d)
     // -----------------------------------------------------------------------
+
+    /// Compute the derived branch validity for a block.
+    ///
+    /// This is the **centralized truth surface** for branch validity.
+    /// All downstream logic — frontier candidacy, dominance evaluation,
+    /// settlement, and escrow release — must use this rather than ad hoc
+    /// status checks.
+    ///
+    /// # Returns
+    ///
+    /// - `DirectInvalid` if the block's own status is `Invalidated`.
+    /// - `AncestryInvalid` if the block itself is not invalidated but
+    ///   any ancestor in its parent chain has `Invalidated` status.
+    /// - `DirectValid` if neither the block nor any ancestor is invalidated.
+    ///
+    /// Terminates at genesis blocks (not stored in `self.blocks`), which
+    /// are considered valid chain roots.
+    pub fn derived_validity(&self, block_id: &BlockId) -> DerivedValidity {
+        let Some(block) = self.blocks.get(block_id) else {
+            // Not a stored block (genesis or unknown) — treat as valid root.
+            return DerivedValidity::DirectValid;
+        };
+
+        // Check the block itself first.
+        if block.status == BlockStatus::Invalidated {
+            return DerivedValidity::DirectInvalid;
+        }
+
+        // Walk the ancestor chain looking for invalidated parents.
+        let mut current = block.parent_id;
+        loop {
+            let Some(ancestor) = self.blocks.get(&current) else {
+                // Reached genesis or unknown parent — valid chain end.
+                return DerivedValidity::DirectValid;
+            };
+            if ancestor.status == BlockStatus::Invalidated {
+                return DerivedValidity::AncestryInvalid;
+            }
+            current = ancestor.parent_id;
+        }
+    }
 
     /// Check whether a block is on a valid chain (no invalidated ancestors).
     ///
-    /// Walks up the parent chain from the given block. Returns false if
-    /// any ancestor (including the block itself) has status Invalidated.
-    /// Terminates at genesis blocks (which are not stored in self.blocks).
+    /// Convenience wrapper around [`derived_validity`]: returns true only
+    /// when derived validity is `DirectValid`.
     pub fn is_on_valid_chain(&self, block_id: &BlockId) -> bool {
-        let mut current = *block_id;
-        loop {
-            let Some(block) = self.blocks.get(&current) else {
-                // Reached a genesis block or unknown parent — valid chain end.
-                return true;
-            };
-            if block.status == BlockStatus::Invalidated {
-                return false;
-            }
-            current = block.parent_id;
-        }
+        self.derived_validity(block_id) == DerivedValidity::DirectValid
     }
 
     /// Gather all valid frontier candidates for a domain.
     ///
-    /// Returns (block_id, validated_metric_delta) pairs for blocks that:
-    /// - Belong to the specified domain
-    /// - Have a validated outcome recorded
-    /// - Are not themselves invalidated or rejected
-    /// - Have no invalidated ancestors in their chain
+    /// Returns (block_id, validated_metric_delta) pairs for blocks whose
+    /// derived validity is `DirectValid` and that belong to the specified
+    /// domain with a recorded validated outcome.
+    ///
+    /// Blocks that are `DirectInvalid`, `AncestryInvalid`, or `Rejected`
+    /// are excluded.
     fn valid_frontier_candidates(
         &self,
         domain_id: &DomainId,
@@ -715,16 +781,40 @@ impl SimulatorState {
                     .get(bid)
                     .map(|b| {
                         b.domain_id == *domain_id
-                            && !matches!(
-                                b.status,
-                                BlockStatus::Rejected | BlockStatus::Invalidated
-                            )
-                            && self.is_on_valid_chain(bid)
+                            && !matches!(b.status, BlockStatus::Rejected)
+                            && self.derived_validity(bid) == DerivedValidity::DirectValid
                     })
                     .unwrap_or(false)
             })
             .map(|(bid, outcome)| (*bid, outcome.validated_metric_delta))
             .collect()
+    }
+
+    /// Gather valid branch tip metrics for dominance evaluation.
+    ///
+    /// Returns a map from block ID to validated metric value, including
+    /// only tips whose derived validity is `DirectValid`. This ensures
+    /// ancestry-poisoned blocks cannot participate in dominance evaluation.
+    pub fn valid_tip_metrics(
+        &self,
+        domain_id: &DomainId,
+    ) -> HashMap<BlockId, MetricValue> {
+        let fork_state = match self.fork_states.get(domain_id) {
+            Some(fs) => fs,
+            None => return HashMap::new(),
+        };
+
+        let mut metrics = HashMap::new();
+        for family in fork_state.families.values() {
+            for tip in &family.branch_tips {
+                if self.derived_validity(tip) == DerivedValidity::DirectValid {
+                    if let Some(outcome) = self.validated_outcomes.get(tip) {
+                        metrics.insert(*tip, outcome.validated_metric_delta);
+                    }
+                }
+            }
+        }
+        metrics
     }
 
     // -----------------------------------------------------------------------

@@ -277,3 +277,44 @@ pub enum EscrowStatus {
     /// Funds have been slashed due to upheld challenge.
     Slashed,
 }
+
+// ---------------------------------------------------------------------------
+// Derived branch validity (Phase 0.3d)
+// ---------------------------------------------------------------------------
+
+/// Derived branch validity for a block.
+///
+/// This is a **computed** concept, not a stored status. It represents the
+/// block's effective validity when ancestry is taken into account.
+///
+/// A block may have a locally accepted-looking stored status (e.g.,
+/// `UnderChallenge`, `ChallengeWindowClosed`) while being ancestry-invalid
+/// because a parent or grandparent was invalidated by an upheld challenge.
+///
+/// Downstream protocol logic — frontier candidacy, dominance evaluation,
+/// settlement, and escrow release — must use derived validity rather than
+/// raw stored status to prevent ancestry-poisoned blocks from being
+/// treated as protocol-valid competitors.
+///
+/// # Variants
+///
+/// - `DirectValid`: the block itself is not invalidated, and no ancestor
+///   in its chain is invalidated. This is the only validity state that
+///   permits frontier candidacy, dominance participation, settlement,
+///   and escrow release.
+///
+/// - `DirectInvalid`: the block's own stored status is `Invalidated`
+///   (set by an upheld challenge against this specific block).
+///
+/// - `AncestryInvalid`: the block's own stored status is not `Invalidated`,
+///   but at least one ancestor in its parent chain has `Invalidated` status.
+///   The block is transitively invalid due to poisoned ancestry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DerivedValidity {
+    /// Block is valid: not directly invalidated, no invalidated ancestors.
+    DirectValid,
+    /// Block was directly invalidated by an upheld challenge.
+    DirectInvalid,
+    /// Block is not itself invalidated, but an ancestor was.
+    AncestryInvalid,
+}

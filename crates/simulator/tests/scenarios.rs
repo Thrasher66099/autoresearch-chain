@@ -9,12 +9,17 @@
 //! Scenarios A-J: Phase 0.2 (basic lifecycle, validation, forks, challenges)
 //! Scenarios K-Q: Phase 0.3 (challenge consequences, validated frontier,
 //!                escrow, invalidation, descendant handling)
+//! Scenarios T-Z: Phase 0.3d (derived branch validity, ancestry-invalid
+//!                settlement/frontier/dominance/escrow gating)
 
 use arc_protocol_types::*;
 use arc_domain_engine::genesis::SeedValidationRecord;
 use arc_protocol_rules::attestation::ProvisionalOutcome;
 use arc_protocol_rules::validator::ValidatorPool;
 use arc_simulator::state::SimulatorState;
+
+// Phase 0.3d: DerivedValidity is used in branch-truth tests.
+use arc_protocol_types::DerivedValidity;
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -1381,4 +1386,543 @@ fn scenario_s_settlement_after_release_epoch_succeeds() {
 
     let escrow = sim.block_escrow(&block_id).unwrap();
     assert_eq!(escrow.status, EscrowStatus::Released);
+}
+
+// =======================================================================
+// Phase 0.3d Scenario Tests: Derived Branch Validity
+// =======================================================================
+
+// =======================================================================
+// Scenario T: DerivedValidity enum classification
+// =======================================================================
+
+/// T1: A directly invalidated block is reported as DirectInvalid.
+#[test]
+fn scenario_t1_direct_invalidation_classification() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    // Before invalidation: DirectValid.
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectValid);
+
+    // Invalidate via upheld challenge.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // After invalidation: DirectInvalid.
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectInvalid);
+}
+
+/// T2: A descendant of an invalidated block is reported as AncestryInvalid.
+#[test]
+fn scenario_t2_ancestry_invalidation_classification() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Chain: genesis → block_a → block_b
+    let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, block_a_id, domain_id, 0.02);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.02);
+
+    // Both are DirectValid before invalidation.
+    assert_eq!(sim.derived_validity(&block_a_id), DerivedValidity::DirectValid);
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::DirectValid);
+
+    // Invalidate block_a (the parent).
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // block_a is DirectInvalid, block_b is AncestryInvalid.
+    assert_eq!(sim.derived_validity(&block_a_id), DerivedValidity::DirectInvalid);
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::AncestryInvalid);
+
+    // block_b's stored status is NOT changed — it still looks locally accepted.
+    assert_eq!(sim.block_status(&block_b_id), Some(BlockStatus::UnderChallenge));
+}
+
+/// T3: A valid sibling/unrelated branch remains DirectValid after
+/// another branch is invalidated.
+#[test]
+fn scenario_t3_valid_sibling_remains_direct_valid() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let parent = genesis_id.as_block_id();
+
+    // Two independent branches off genesis.
+    let block_a = make_block(10, parent, domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, parent, domain_id, 0.03);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.03);
+
+    // Both are DirectValid.
+    assert_eq!(sim.derived_validity(&block_a_id), DerivedValidity::DirectValid);
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::DirectValid);
+
+    // Invalidate block_a.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // block_a is DirectInvalid, block_b remains DirectValid.
+    assert_eq!(sim.derived_validity(&block_a_id), DerivedValidity::DirectInvalid);
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::DirectValid);
+}
+
+// =======================================================================
+// Scenario U: Ancestry-invalid block cannot become frontier
+// =======================================================================
+
+/// U1: An ancestry-invalid block cannot be a frontier candidate,
+/// even if it was the frontier before the ancestor was invalidated.
+#[test]
+fn scenario_u_ancestry_invalid_cannot_be_frontier() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Chain: genesis → block_a → block_b (frontier)
+    let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, block_a_id, domain_id, 0.05);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.05);
+
+    // block_b is frontier.
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+
+    // Invalidate block_a (parent of block_b).
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // block_b is AncestryInvalid.
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::AncestryInvalid);
+
+    // Frontier must be cleared — no valid candidates remain.
+    assert!(sim.canonical_frontier(&domain_id).is_none());
+}
+
+/// U2: When an ancestor is invalidated but a valid sibling branch exists,
+/// the frontier falls to the valid sibling.
+#[test]
+fn scenario_u_frontier_falls_to_valid_sibling() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let parent = genesis_id.as_block_id();
+
+    // Branch 1: genesis → block_a → block_b (best metric)
+    let block_a = make_block(10, parent, domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, block_a_id, domain_id, 0.05);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.05);
+
+    // Branch 2: genesis → block_c (independent, lower metric)
+    let block_c = make_block(12, parent, domain_id, 0.02);
+    let block_c_id = block_c.id;
+    submit_and_validate_with_delta(&mut sim, block_c, 0.02);
+
+    // block_b is frontier (0.05 > 0.02 > 0.01).
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+
+    // Invalidate block_a — poisons block_b.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // block_b is AncestryInvalid, block_c is DirectValid.
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::AncestryInvalid);
+    assert_eq!(sim.derived_validity(&block_c_id), DerivedValidity::DirectValid);
+
+    // Frontier should fall to block_c.
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_c_id));
+}
+
+// =======================================================================
+// Scenario V: Ancestry-invalid block cannot dominate
+// =======================================================================
+
+/// V1: valid_tip_metrics excludes ancestry-invalid tips.
+#[test]
+fn scenario_v_ancestry_invalid_excluded_from_dominance() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let parent = genesis_id.as_block_id();
+
+    // Fork: genesis → block_a (0.01), genesis → block_b → block_c (0.05)
+    let block_a = make_block(10, parent, domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, parent, domain_id, 0.02);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.02);
+
+    // Both are DirectValid and in the tip metrics.
+    let metrics = sim.valid_tip_metrics(&domain_id);
+    assert!(metrics.contains_key(&block_a_id));
+    assert!(metrics.contains_key(&block_b_id));
+
+    // Now add a child of block_b.
+    let block_c = make_block(12, block_b_id, domain_id, 0.05);
+    let block_c_id = block_c.id;
+    submit_and_validate_with_delta(&mut sim, block_c, 0.05);
+
+    // Invalidate block_b — poisons block_c.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_b_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // block_c is AncestryInvalid.
+    assert_eq!(sim.derived_validity(&block_c_id), DerivedValidity::AncestryInvalid);
+
+    // valid_tip_metrics must not include block_b (DirectInvalid) or
+    // block_c (AncestryInvalid). Only block_a should remain.
+    let metrics = sim.valid_tip_metrics(&domain_id);
+    assert!(!metrics.contains_key(&block_b_id),
+        "DirectInvalid block must not be in valid tip metrics");
+    assert!(!metrics.contains_key(&block_c_id),
+        "AncestryInvalid block must not be in valid tip metrics");
+    assert!(metrics.contains_key(&block_a_id),
+        "DirectValid block must remain in valid tip metrics");
+}
+
+// =======================================================================
+// Scenario W: Ancestry-invalid block cannot settle
+// =======================================================================
+
+/// W1: Settlement fails cleanly for an ancestry-invalid block.
+#[test]
+fn scenario_w_ancestry_invalid_cannot_settle() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Chain: genesis → block_a → block_b
+    let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, block_a_id, domain_id, 0.02);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.02);
+
+    // Advance block_b through challenge window.
+    sim.close_challenge_window(&block_b_id).unwrap();
+
+    // Advance past release_epoch.
+    for _ in 0..6 {
+        sim.advance_epoch();
+    }
+
+    // Now invalidate block_a (the parent).
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // block_b is AncestryInvalid.
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::AncestryInvalid);
+
+    // block_b is in ChallengeWindowClosed — would normally be settleable.
+    assert_eq!(sim.block_status(&block_b_id), Some(BlockStatus::ChallengeWindowClosed));
+
+    // Settlement must fail.
+    let result = sim.settle_block(&block_b_id);
+    assert!(result.is_err(), "ancestry-invalid block must not settle");
+    assert!(result.unwrap_err().contains("AncestryInvalid"),
+        "error message must mention AncestryInvalid");
+
+    // Block status must remain ChallengeWindowClosed (not Settled).
+    assert_eq!(sim.block_status(&block_b_id), Some(BlockStatus::ChallengeWindowClosed));
+}
+
+/// W2: Settlement also fails for a directly invalidated block.
+#[test]
+fn scenario_w_direct_invalid_cannot_settle() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    // Invalidate the block directly.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectInvalid);
+
+    // Advance past release_epoch.
+    for _ in 0..6 {
+        sim.advance_epoch();
+    }
+
+    // Settlement must fail.
+    let result = sim.settle_block(&block_id);
+    assert!(result.is_err(), "directly invalidated block must not settle");
+}
+
+// =======================================================================
+// Scenario X: Ancestry-invalid block does not get escrow released
+// =======================================================================
+
+/// X1: Escrow remains Held when settlement is blocked by ancestry invalidity.
+#[test]
+fn scenario_x_ancestry_invalid_escrow_not_released() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Chain: genesis → block_a → block_b
+    let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, block_a_id, domain_id, 0.02);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.02);
+
+    // block_b has escrow.
+    let escrow_before = sim.block_escrow(&block_b_id).unwrap();
+    assert_eq!(escrow_before.status, EscrowStatus::Held);
+
+    // Advance block_b through challenge window.
+    sim.close_challenge_window(&block_b_id).unwrap();
+    for _ in 0..6 {
+        sim.advance_epoch();
+    }
+
+    // Invalidate block_a (parent).
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Try to settle block_b (will fail due to AncestryInvalid).
+    let _ = sim.settle_block(&block_b_id);
+
+    // Escrow for block_b must still be Held (not Released).
+    let escrow_after = sim.block_escrow(&block_b_id).unwrap();
+    assert_eq!(escrow_after.status, EscrowStatus::Held,
+        "escrow must remain Held for ancestry-invalid block");
+}
+
+// =======================================================================
+// Scenario Y: Existing upheld-challenge invalidation behavior intact
+// =======================================================================
+
+/// Y1: Direct invalidation via upheld challenge still works correctly
+/// (regression test for existing Phase 0.3 behavior).
+#[test]
+fn scenario_y_upheld_challenge_direct_invalidation_still_works() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    // Escrow exists and is Held.
+    assert_eq!(sim.block_escrow(&block_id).unwrap().status, EscrowStatus::Held);
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_id));
+    assert!(sim.validated_outcome(&block_id).is_some());
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectValid);
+
+    // Upheld challenge invalidates.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // All Phase 0.3 consequences remain intact:
+    assert_eq!(sim.block_status(&block_id), Some(BlockStatus::Invalidated));
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectInvalid);
+    assert_eq!(sim.block_escrow(&block_id).unwrap().status, EscrowStatus::Slashed);
+    assert!(sim.canonical_frontier(&domain_id).is_none());
+    assert!(sim.validated_outcome(&block_id).is_none());
+    assert_eq!(sim.challenges[&challenge_id].status, ChallengeStatus::Upheld);
+}
+
+/// Y2: Rejected challenge preserves derived validity.
+#[test]
+fn scenario_y_rejected_challenge_preserves_derived_validity() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectValid);
+
+    // Open, review, and reject challenge.
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.reject_challenge(&challenge_id).unwrap();
+
+    // Derived validity unchanged.
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectValid);
+}
+
+// =======================================================================
+// Scenario Z: Deep ancestry chain and multi-level invalidation
+// =======================================================================
+
+/// Z1: Grandchild is AncestryInvalid when grandparent is invalidated.
+#[test]
+fn scenario_z_deep_ancestry_invalidation() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Chain: genesis → a → b → c
+    let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.01);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.01);
+
+    let block_b = make_block(11, block_a_id, domain_id, 0.02);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.02);
+
+    let block_c = make_block(12, block_b_id, domain_id, 0.03);
+    let block_c_id = block_c.id;
+    submit_and_validate_with_delta(&mut sim, block_c, 0.03);
+
+    assert_eq!(sim.derived_validity(&block_a_id), DerivedValidity::DirectValid);
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::DirectValid);
+    assert_eq!(sim.derived_validity(&block_c_id), DerivedValidity::DirectValid);
+
+    // Invalidate block_a (the root of the chain).
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id: block_a_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // block_a is DirectInvalid, block_b and block_c are AncestryInvalid.
+    assert_eq!(sim.derived_validity(&block_a_id), DerivedValidity::DirectInvalid);
+    assert_eq!(sim.derived_validity(&block_b_id), DerivedValidity::AncestryInvalid);
+    assert_eq!(sim.derived_validity(&block_c_id), DerivedValidity::AncestryInvalid);
+
+    // Neither can settle.
+    sim.close_challenge_window(&block_b_id).unwrap();
+    sim.close_challenge_window(&block_c_id).unwrap();
+    for _ in 0..6 {
+        sim.advance_epoch();
+    }
+    assert!(sim.settle_block(&block_b_id).is_err());
+    assert!(sim.settle_block(&block_c_id).is_err());
+
+    // Escrows remain Held.
+    assert_eq!(sim.block_escrow(&block_b_id).unwrap().status, EscrowStatus::Held);
+    assert_eq!(sim.block_escrow(&block_c_id).unwrap().status, EscrowStatus::Held);
+
+    // Frontier must be cleared.
+    assert!(sim.canonical_frontier(&domain_id).is_none());
 }
