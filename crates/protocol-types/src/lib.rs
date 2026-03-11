@@ -25,422 +25,401 @@
 //! `arc-protocol-rules`. Domain lifecycle lives in `arc-domain-engine`.
 //! Fork logic lives in `arc-fork-engine`. And so on.
 //!
-//! # Implementation status
+//! # Module organization
 //!
-//! Stub types only. No fields, no serialization, no hashing yet.
-//! The type names and module boundaries are drawn from the protocol spec (v0.2)
-//! and terminology document to ensure the code matches the protocol language.
+//! - [`ids`] --- Strongly typed identifier and reference wrappers
+//! - [`enums`] --- Canonical protocol enums (statuses, classifications, votes)
+//! - [`domain`] --- Problem domain and domain specification
+//! - [`genesis`] --- Genesis block, research track standards, track initialization
+//! - [`block`] --- Block and epoch types
+//! - [`validation`] --- Validation attestations and evidence bundles
+//! - [`challenge`] --- Challenge records
+//! - [`frontier`] --- Canonical frontier state, materialized state, codebase references
+//! - [`fork`] --- Fork families
+//! - [`escrow`] --- Escrow records and attribution claims
+//! - [`policy`] --- Metric and dataset integrity policies
+//!
+//! All public types are re-exported at the crate root for convenience.
 
-// TODO: Decide on canonical hash function (SHA-256, BLAKE3, etc.)
-// TODO: Add serde derives once canonical serialization format is chosen.
-// TODO: Add content-addressing traits once hash model is locked.
+pub mod ids;
+pub mod enums;
+pub mod domain;
+pub mod genesis;
+pub mod block;
+pub mod validation;
+pub mod challenge;
+pub mod frontier;
+pub mod fork;
+pub mod escrow;
+pub mod policy;
+pub mod validate;
+pub mod fixtures;
 
-// ---------------------------------------------------------------------------
-// Identifier and hash primitives
-// ---------------------------------------------------------------------------
+// Re-export all public types at crate root for convenience.
+// Users can write `use arc_protocol_types::BlockId;` or
+// `use arc_protocol_types::ids::BlockId;` --- both work.
+pub use ids::*;
+pub use enums::*;
+pub use domain::*;
+pub use genesis::*;
+pub use block::*;
+pub use validation::*;
+pub use challenge::*;
+pub use frontier::*;
+pub use fork::*;
+pub use escrow::*;
+pub use policy::*;
+pub use validate::*;
+pub use fixtures::*;
 
-/// Opaque 32-byte identifier. Placeholder until hash model is decided.
-///
-/// TODO: Replace with a proper content-addressed hash type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Hash32(pub [u8; 32]);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Unique identifier for a problem domain.
-pub type DomainId = Hash32;
+    // -----------------------------------------------------------------------
+    // ID wrapper tests
+    // -----------------------------------------------------------------------
 
-/// Unique identifier for a block within the protocol.
-pub type BlockId = Hash32;
+    #[test]
+    fn id_zero_is_all_zeros() {
+        assert_eq!(DomainId::ZERO.as_bytes(), &[0u8; 32]);
+        assert_eq!(BlockId::ZERO.as_bytes(), &[0u8; 32]);
+        assert_eq!(GenesisBlockId::ZERO.as_bytes(), &[0u8; 32]);
+        assert_eq!(ArtifactHash::ZERO.as_bytes(), &[0u8; 32]);
+    }
 
-/// Unique identifier for a research track (rooted at its genesis block).
-pub type TrackId = Hash32;
+    #[test]
+    fn id_from_bytes_roundtrip() {
+        let bytes = [42u8; 32];
+        let id = DomainId::from_bytes(bytes);
+        assert_eq!(*id.as_bytes(), bytes);
+    }
 
-/// Unique identifier for a fork family within a domain.
-pub type ForkFamilyId = Hash32;
+    #[test]
+    fn different_id_types_do_not_conflate() {
+        // Type safety: DomainId and BlockId have the same bytes but are
+        // distinct types. This test verifies they exist independently.
+        let d = DomainId::ZERO;
+        let b = BlockId::ZERO;
+        // Same underlying bytes, but `d == b` would not compile.
+        assert_eq!(d.as_bytes(), b.as_bytes());
+    }
 
-/// Unique identifier for a participant (proposer, validator, challenger, governor).
-///
-/// TODO: Decide on identity/address model.
-pub type ParticipantId = Hash32;
+    #[test]
+    fn id_display_shows_hex_prefix() {
+        let id = DomainId::from_bytes({
+            let mut b = [0u8; 32];
+            b[0] = 0xab;
+            b[1] = 0xcd;
+            b[2] = 0xef;
+            b[3] = 0x01;
+            b
+        });
+        let displayed = format!("{}", id);
+        assert_eq!(displayed, "abcdef01\u{2026}");
+    }
 
-/// Unique identifier for an epoch.
-pub type EpochId = u64;
+    #[test]
+    fn id_debug_includes_type_name() {
+        let id = BlockId::from_bytes([0xff; 32]);
+        let debug = format!("{:?}", id);
+        assert!(debug.starts_with("BlockId("));
+    }
 
-// ---------------------------------------------------------------------------
-// Domain and track types
-// ---------------------------------------------------------------------------
+    #[test]
+    fn epoch_id_ordering() {
+        let e0 = EpochId::GENESIS;
+        let e1 = e0.next();
+        let e2 = e1.next();
+        assert!(e0 < e1);
+        assert!(e1 < e2);
+        assert_eq!(e2.0, 2);
+    }
 
-/// A protocol-defined research arena.
-///
-/// Each domain defines a specific problem participants are trying to improve,
-/// with its own codebase root, evaluation logic, fork competition space,
-/// canonical frontier, and reward context.
-///
-/// TODO: Add fields from DomainSpec, parent/child domain references,
-///       domain type classification, and lifecycle state.
-#[derive(Debug)]
-pub struct ProblemDomain {
-    pub id: DomainId,
-    // TODO: spec, domain_type, parent, children, active track references
-}
+    #[test]
+    fn epoch_id_display() {
+        assert_eq!(format!("{}", EpochId::GENESIS), "epoch:0");
+        assert_eq!(format!("{}", EpochId(42)), "epoch:42");
+    }
 
-/// The structural specification of a ProblemDomain.
-///
-/// Defines codebase root, evaluation targets, metrics, modification surface,
-/// epoch policy, fork policy, integration rules, canonicalization behavior,
-/// and materialization rules.
-///
-/// TODO: Add all spec fields from protocol-v0.2.
-#[derive(Debug)]
-pub struct DomainSpec {
-    pub domain_id: DomainId,
-    // TODO: codebase_root, evaluation_target, primary_metric, search_surface,
-    //       frozen_surface, epoch_policy, fork_policy, materialization_policy
-}
+    #[test]
+    fn genesis_block_id_conversions() {
+        let gid = GenesisBlockId::from_bytes([1u8; 32]);
+        let bid = gid.as_block_id();
+        let tid = gid.as_track_tree_id();
+        assert_eq!(gid.as_bytes(), bid.as_bytes());
+        assert_eq!(gid.as_bytes(), tid.as_bytes());
+    }
 
-/// Descriptive classification of a ProblemDomain.
-///
-/// Types: root, model, subsystem, technique, infrastructure, integration, experimental.
-/// Types may influence default policy but do not override explicit rules.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DomainType {
-    Root,
-    Model,
-    Subsystem,
-    Technique,
-    Infrastructure,
-    Integration,
-    Experimental,
-}
+    // -----------------------------------------------------------------------
+    // Enum variant distinctness
+    // -----------------------------------------------------------------------
 
-/// Protocol-legible declaration of the intended class of value a domain produces.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DomainIntent {
-    pub label: String,
-    // TODO: structured classification from protocol spec
-}
+    #[test]
+    fn block_status_variants_are_distinct() {
+        let statuses = [
+            BlockStatus::Submitted,
+            BlockStatus::UnderValidation,
+            BlockStatus::ValidationComplete,
+            BlockStatus::UnderChallenge,
+            BlockStatus::ChallengeWindowClosed,
+            BlockStatus::Settled,
+            BlockStatus::Final,
+            BlockStatus::Rejected,
+        ];
+        for (i, a) in statuses.iter().enumerate() {
+            for (j, b) in statuses.iter().enumerate() {
+                assert_eq!(i == j, a == b);
+            }
+        }
+    }
 
-/// An interface specification defining the minimum shape a research track must
-/// satisfy to participate in the protocol.
-///
-/// The first standard is RTS-1: single-metric fixed-budget, bounded replay,
-/// autonomous agent loops, Stage 1 research-discovery.
-///
-/// TODO: Add RTS version enum, required field declarations, conformance checking trait.
-#[derive(Debug)]
-pub struct ResearchTrackStandard {
-    pub version: RtsVersion,
-    // TODO: required fields, constraints, conformance rules
-}
+    #[test]
+    fn challenge_type_variants_are_distinct() {
+        assert_ne!(ChallengeType::BlockReplay, ChallengeType::AttestationFraud);
+        assert_ne!(ChallengeType::Attribution, ChallengeType::Dominance);
+        assert_ne!(ChallengeType::Dominance, ChallengeType::MetricAdequacy);
+    }
 
-/// Version identifier for research track standards.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RtsVersion {
-    /// Single-metric, fixed-budget, bounded single-node replay.
-    Rts1,
-    // Future: Rts2, Rts3, etc.
-}
+    #[test]
+    fn validator_vote_variants_are_distinct() {
+        assert_ne!(ValidatorVote::Pass, ValidatorVote::Fail);
+        assert_ne!(ValidatorVote::Inconclusive, ValidatorVote::FraudSuspected);
+    }
 
-// ---------------------------------------------------------------------------
-// Genesis and track initialization
-// ---------------------------------------------------------------------------
+    #[test]
+    fn metric_direction_variants_are_distinct() {
+        assert_ne!(MetricDirection::HigherBetter, MetricDirection::LowerBetter);
+    }
 
-/// The root block of a new research track.
-///
-/// A genesis block is not a claim of improvement — it is a claim that a new
-/// research arena is well-defined enough to become a protocol-recognized market.
-///
-/// TODO: Add all genesis fields: research target declaration, seed recipe,
-///       baseline score, dataset references, evaluation harness, search/frozen
-///       surface, hardware class, time budget, seed bond.
-#[derive(Debug)]
-pub struct GenesisBlock {
-    pub track_id: TrackId,
-    pub proposer: ParticipantId,
-    pub rts_version: RtsVersion,
-    // TODO: research_target, seed_recipe_ref, baseline_score, dataset_ref,
-    //       evaluation_harness_ref, search_surface, frozen_surface,
-    //       hardware_class, time_budget, seed_bond
-}
+    // -----------------------------------------------------------------------
+    // Serialization round-trips
+    // -----------------------------------------------------------------------
 
-/// The lifecycle state of a track being initialized.
-///
-/// Tracks go through: Proposed -> Validating -> Active | Failed.
-///
-/// TODO: Add conformance check state, seed reproduction state,
-///       activation threshold tracking, challenge state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TrackInitializationState {
-    Proposed,
-    Validating,
-    Active,
-    Failed,
-}
+    #[test]
+    fn serde_roundtrip_domain_id() {
+        let id = DomainId::from_bytes([7u8; 32]);
+        let json = serde_json::to_string(&id).unwrap();
+        let recovered: DomainId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, recovered);
+    }
 
-/// Track initialization record.
-///
-/// TODO: Add activation conditions, validator participation tracking,
-///       bonded threshold state, challenge records.
-#[derive(Debug)]
-pub struct TrackInitialization {
-    pub track_id: TrackId,
-    pub genesis: GenesisBlock,
-    pub state: TrackInitializationState,
-}
+    #[test]
+    fn serde_roundtrip_epoch_id() {
+        let eid = EpochId(42);
+        let json = serde_json::to_string(&eid).unwrap();
+        let recovered: EpochId = serde_json::from_str(&json).unwrap();
+        assert_eq!(eid, recovered);
+    }
 
-/// The domain-scoped descendant tree rooted at a single genesis block.
-///
-/// Each TrackTree has its own fork families, validator scope, reward context,
-/// canonical frontier, and challenge surface. The chain is a forest of
-/// independent domain-rooted TrackTrees.
-///
-/// TODO: Add tree structure, fork family index, frontier reference,
-///       validator pool reference, reward context.
-#[derive(Debug)]
-pub struct TrackTree {
-    pub track_id: TrackId,
-    pub domain_id: DomainId,
-    // TODO: root_genesis, fork_families, canonical_frontier, reward_context
-}
+    #[test]
+    fn serde_roundtrip_block_status() {
+        let status = BlockStatus::UnderValidation;
+        let json = serde_json::to_string(&status).unwrap();
+        let recovered: BlockStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, recovered);
+    }
 
-// ---------------------------------------------------------------------------
-// Block types
-// ---------------------------------------------------------------------------
+    #[test]
+    fn serde_roundtrip_problem_domain() {
+        let domain = ProblemDomain {
+            id: DomainId::ZERO,
+            name: "test-domain".to_string(),
+            domain_type: DomainType::Experimental,
+            parent_domain_id: None,
+            spec_id: DomainSpecId::ZERO,
+        };
+        let json = serde_json::to_string(&domain).unwrap();
+        let recovered: ProblemDomain = serde_json::from_str(&json).unwrap();
+        assert_eq!(domain, recovered);
+    }
 
-/// A protocol epoch specification.
-///
-/// Defines the rules of a research game during a fixed interval: datasets,
-/// metrics, environment requirements, compute policies, thresholds, reward
-/// parameters, and challenge windows.
-///
-/// TODO: Add all epoch fields.
-#[derive(Debug)]
-pub struct EpochSpec {
-    pub epoch_id: EpochId,
-    // TODO: datasets, metrics, environment, compute_policy, thresholds,
-    //       reward_params, challenge_windows
-}
+    #[test]
+    fn serde_roundtrip_validation_attestation() {
+        let att = ValidationAttestation {
+            block_id: BlockId::ZERO,
+            validator: ValidatorId::ZERO,
+            vote: ValidatorVote::Pass,
+            replay_evidence_ref: ArtifactHash::ZERO,
+            timestamp: 1000,
+        };
+        let json = serde_json::to_string(&att).unwrap();
+        let recovered: ValidationAttestation = serde_json::from_str(&json).unwrap();
+        assert_eq!(att, recovered);
+    }
 
-/// A claim that a child training recipe improves on a parent training recipe.
-///
-/// TODO: Add all block fields: domain reference, parent/child state refs,
-///       diff reference, claimed metric delta, evidence bundle hash,
-///       proposer identity, fee/bond, epoch reference.
-#[derive(Debug)]
-pub struct Block {
-    pub id: BlockId,
-    pub domain_id: DomainId,
-    pub parent_id: Option<BlockId>, // None only for genesis blocks
-    pub proposer: ParticipantId,
-    pub epoch_id: EpochId,
-    // TODO: child_state_ref, diff_ref, claimed_metric_delta, evidence_hash,
-    //       fee, bond, timestamp
-}
+    #[test]
+    fn serde_roundtrip_codebase_state_ref_variants() {
+        let refs = vec![
+            CodebaseStateRef::LatestFrontier {
+                domain_id: DomainId::ZERO,
+            },
+            CodebaseStateRef::Historical {
+                materialized_state_id: MaterializedStateId::ZERO,
+            },
+            CodebaseStateRef::AtBlock {
+                block_id: BlockId::ZERO,
+            },
+        ];
+        for r in &refs {
+            let json = serde_json::to_string(r).unwrap();
+            let recovered: CodebaseStateRef = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, &recovered);
+        }
+    }
 
-// ---------------------------------------------------------------------------
-// Validation types
-// ---------------------------------------------------------------------------
+    #[test]
+    fn serde_roundtrip_escrow_record() {
+        let escrow = EscrowRecord {
+            id: EscrowId::ZERO,
+            block_id: BlockId::ZERO,
+            beneficiary: ParticipantId::ZERO,
+            amount: 100,
+            status: EscrowStatus::Held,
+            created_epoch: EpochId(1),
+            release_epoch: EpochId(5),
+        };
+        let json = serde_json::to_string(&escrow).unwrap();
+        let recovered: EscrowRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(escrow, recovered);
+    }
 
-/// Possible outcomes of a validation replay.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AttestationVote {
-    Pass,
-    Fail,
-    Inconclusive,
-    FraudSuspected,
-}
+    // -----------------------------------------------------------------------
+    // Struct construction tests
+    // -----------------------------------------------------------------------
 
-/// A signed validator claim about whether a proposed improvement reproduces.
-///
-/// TODO: Add validator identity, replay metadata, signature, timestamp.
-#[derive(Debug)]
-pub struct ValidationAttestation {
-    pub block_id: BlockId,
-    pub validator: ParticipantId,
-    pub vote: AttestationVote,
-    // TODO: replay_metadata, signature, timestamp
-}
+    #[test]
+    fn construct_genesis_block() {
+        let genesis = GenesisBlock {
+            id: GenesisBlockId::ZERO,
+            rts_version: ResearchTrackStandardVersion::Rts1,
+            domain_id: DomainId::ZERO,
+            proposer: ProposerId::ZERO,
+            research_target_declaration: "Improve CIFAR-10 training recipe".to_string(),
+            domain_intent: DomainIntent::EndToEndRecipeImprovement,
+            seed_recipe_ref: ArtifactHash::ZERO,
+            seed_codebase_state_ref: ArtifactHash::ZERO,
+            frozen_surface: vec!["eval/".to_string()],
+            search_surface: vec!["train.py".to_string(), "config/".to_string()],
+            canonical_dataset_ref: ArtifactHash::ZERO,
+            dataset_hash: ArtifactHash::ZERO,
+            dataset_splits: DatasetSplits {
+                training: ArtifactHash::ZERO,
+                validation: ArtifactHash::ZERO,
+                test: Some(ArtifactHash::ZERO),
+            },
+            evaluation_harness_ref: ArtifactHash::ZERO,
+            metric_id: "test_accuracy".to_string(),
+            metric_direction: MetricDirection::HigherBetter,
+            hardware_class: "RTX 4090".to_string(),
+            time_budget_secs: 3600,
+            seed_environment_manifest_ref: ArtifactHash::ZERO,
+            seed_score: 0.93,
+            artifact_schema_ref: ArtifactHash::ZERO,
+            seed_bond: 1000,
+            license_declaration: "MIT".to_string(),
+            timestamp: 1700000000,
+        };
+        assert_eq!(genesis.rts_version, ResearchTrackStandardVersion::Rts1);
+        assert_eq!(genesis.metric_direction, MetricDirection::HigherBetter);
+    }
 
-// ---------------------------------------------------------------------------
-// Fork types
-// ---------------------------------------------------------------------------
+    #[test]
+    fn construct_block() {
+        let block = Block {
+            id: BlockId::from_bytes([1u8; 32]),
+            domain_id: DomainId::ZERO,
+            parent_id: BlockId::ZERO,
+            proposer: ProposerId::ZERO,
+            child_state_ref: ArtifactHash::from_bytes([2u8; 32]),
+            diff_ref: ArtifactHash::from_bytes([3u8; 32]),
+            claimed_metric_delta: 0.02,
+            evidence_bundle_hash: ArtifactHash::from_bytes([4u8; 32]),
+            fee: 10,
+            bond: 100,
+            epoch_id: EpochId(1),
+            status: BlockStatus::Submitted,
+            timestamp: 1700000100,
+        };
+        assert_eq!(block.status, BlockStatus::Submitted);
+        assert_eq!(block.epoch_id, EpochId(1));
+    }
 
-/// A set of competing branches within a domain that share a common ancestor.
-///
-/// TODO: Add branch references, dominance state, frontier tracking.
-#[derive(Debug)]
-pub struct ForkFamily {
-    pub id: ForkFamilyId,
-    pub domain_id: DomainId,
-    // TODO: common_ancestor, branches, dominant_branch, frontier_block
-}
+    #[test]
+    fn construct_challenge_record() {
+        let challenge = ChallengeRecord {
+            id: ChallengeId::ZERO,
+            challenge_type: ChallengeType::BlockReplay,
+            target_block_id: BlockId::ZERO,
+            challenger: ParticipantId::ZERO,
+            bond: 500,
+            evidence_ref: ArtifactHash::ZERO,
+            status: ChallengeStatus::Open,
+            epoch_id: EpochId(2),
+            timestamp: 1700000200,
+        };
+        assert_eq!(challenge.status, ChallengeStatus::Open);
+    }
 
-// ---------------------------------------------------------------------------
-// Challenge types
-// ---------------------------------------------------------------------------
+    #[test]
+    fn construct_fork_family() {
+        let fork = ForkFamily {
+            id: ForkFamilyId::ZERO,
+            domain_id: DomainId::ZERO,
+            track_tree_id: TrackTreeId::ZERO,
+            common_ancestor_id: BlockId::ZERO,
+            branch_tips: vec![
+                BlockId::from_bytes([1u8; 32]),
+                BlockId::from_bytes([2u8; 32]),
+            ],
+            dominant_branch_tip: None,
+        };
+        assert_eq!(fork.branch_tips.len(), 2);
+        assert!(fork.dominant_branch_tip.is_none());
+    }
 
-/// Categories of challenge the protocol supports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChallengeType {
-    /// Challenge against a block's claimed metric delta.
-    BlockReplay,
-    /// Challenge against a validator's attestation.
-    AttestationFraud,
-    /// Challenge against an attribution claim.
-    Attribution,
-    /// Challenge against a fork dominance declaration.
-    Dominance,
-    /// Challenge against a genesis proposal's metric adequacy.
-    MetricAdequacy,
-}
+    #[test]
+    fn construct_track_tree() {
+        let gid = GenesisBlockId::from_bytes([10u8; 32]);
+        let tree = TrackTree {
+            id: gid.as_track_tree_id(),
+            domain_id: DomainId::ZERO,
+            genesis_block_id: gid,
+            fork_families: vec![],
+            canonical_frontier_block_id: None,
+        };
+        assert_eq!(tree.genesis_block_id.as_bytes(), tree.id.as_bytes());
+        assert!(tree.fork_families.is_empty());
+    }
 
-/// A bonded dispute object in the protocol.
-///
-/// TODO: Add target reference, challenger identity, bond, evidence,
-///       resolution state, remedy.
-#[derive(Debug)]
-pub struct ChallengeRecord {
-    pub challenge_type: ChallengeType,
-    pub challenger: ParticipantId,
-    // TODO: target_ref, bond, evidence_ref, state, resolution, remedy
-}
+    #[test]
+    fn construct_materialized_state() {
+        let ms = MaterializedState {
+            id: MaterializedStateId::ZERO,
+            domain_id: DomainId::ZERO,
+            root_tree_hash: ArtifactHash::from_bytes([1u8; 32]),
+            resolved_dependency_manifest_hash: ArtifactHash::from_bytes([2u8; 32]),
+            resolved_config_hash: ArtifactHash::from_bytes([3u8; 32]),
+            environment_manifest_hash: ArtifactHash::from_bytes([4u8; 32]),
+            evaluation_manifest_hash: ArtifactHash::from_bytes([5u8; 32]),
+            materialized_from_block_id: BlockId::ZERO,
+            timestamp: 1700000300,
+        };
+        assert_ne!(ms.root_tree_hash, ms.resolved_config_hash);
+    }
 
-// ---------------------------------------------------------------------------
-// Reward and escrow types
-// ---------------------------------------------------------------------------
-
-/// Temporary holding of rewards pending challenge-window expiration.
-///
-/// TODO: Add amount, beneficiary, release conditions, slashing conditions.
-#[derive(Debug)]
-pub struct EscrowRecord {
-    pub block_id: BlockId,
-    pub beneficiary: ParticipantId,
-    // TODO: amount, release_epoch, slashing_conditions, state
-}
-
-/// Attribution claim types.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AttributionType {
-    /// Credit for first validated appearance of a useful idea.
-    Origin,
-    /// Credit for porting a useful idea into a stronger branch.
-    Integration,
-    /// Credit for moving the best validated frontier forward.
-    Frontier,
-}
-
-/// A claim of credit for a contribution.
-///
-/// TODO: Add source references, validation state, reward fraction.
-#[derive(Debug)]
-pub struct AttributionClaim {
-    pub attribution_type: AttributionType,
-    pub claimant: ParticipantId,
-    pub block_id: BlockId,
-    // TODO: source_refs, validation_state, reward_fraction
-}
-
-// ---------------------------------------------------------------------------
-// Canonical state types
-// ---------------------------------------------------------------------------
-
-/// The protocol-recognized best assembled state of a ProblemDomain.
-///
-/// Includes or resolves to the dominant frontier block, full source tree,
-/// resolved configuration, dependency manifest, environment manifest,
-/// evaluation manifest, and content-addressed snapshot reference.
-///
-/// This is what participants pull to begin new work.
-///
-/// TODO: Add all frontier state fields and resolution logic.
-#[derive(Debug)]
-pub struct CanonicalFrontierState {
-    pub domain_id: DomainId,
-    pub frontier_block_id: BlockId,
-    // TODO: source_tree_ref, config_ref, dependency_manifest_ref,
-    //       environment_manifest_ref, evaluation_manifest_ref, snapshot_ref
-}
-
-/// A full assembled working snapshot of a domain's codebase and execution context.
-///
-/// Distinguished from a BlockDiff (incremental change). Content-addressed and
-/// publicly fetchable. Required at fork dominance transitions, scheduled
-/// checkpoints, or when diff chains exceed policy thresholds.
-///
-/// TODO: Add content-addressed reference, assembly metadata.
-#[derive(Debug)]
-pub struct MaterializedState {
-    pub domain_id: DomainId,
-    // TODO: content_hash, assembly_metadata, block_id, timestamp
-}
-
-/// A protocol-resolvable reference to a full assembled codebase state.
-///
-/// Resolves to a CanonicalFrontierState or a specific historical MaterializedState.
-///
-/// TODO: Add resolution variants and lookup logic.
-#[derive(Debug)]
-pub struct CodebaseStateRef {
-    pub domain_id: DomainId,
-    // TODO: resolution target (latest frontier vs. specific historical state)
-}
-
-// ---------------------------------------------------------------------------
-// Integrity policy types
-// ---------------------------------------------------------------------------
-
-/// Per-track policy for evaluation metric integrity.
-///
-/// Immutable metric declaration, immutable direction, frozen evaluation harness,
-/// search/frozen surface separation, replay requirements, tolerance rules.
-///
-/// TODO: Add all policy fields.
-#[derive(Debug)]
-pub struct MetricIntegrityPolicy {
-    pub track_id: TrackId,
-    // TODO: metric_name, direction, tolerance, harness_ref, replay_requirements
-}
-
-/// Per-track policy for dataset integrity.
-///
-/// Canonical reference, content-addressed identity, split declaration,
-/// availability requirements, preprocessing rules, license status.
-///
-/// TODO: Add all policy fields.
-#[derive(Debug)]
-pub struct DatasetIntegrityPolicy {
-    pub track_id: TrackId,
-    // TODO: dataset_ref, content_hash, splits, availability, preprocessing, license
-}
-
-// ---------------------------------------------------------------------------
-// Evidence types
-// ---------------------------------------------------------------------------
-
-/// The complete public set of artifacts required to replay and verify a block.
-///
-/// TODO: Add all evidence bundle fields: code diff, config, environment manifest,
-///       dataset references, evaluation procedure, training budget, seeds,
-///       logs, metric outputs, artifact hashes.
-#[derive(Debug)]
-pub struct EvidenceBundle {
-    pub block_id: BlockId,
-    // TODO: diff_ref, config_ref, env_manifest_ref, dataset_refs,
-    //       eval_procedure_ref, training_budget, seeds, log_ref, metric_outputs
-}
-
-// ---------------------------------------------------------------------------
-// Cross-domain types
-// ---------------------------------------------------------------------------
-
-/// A block that ports an improvement from one domain into another.
-///
-/// TODO: Add source domain, source artifacts, destination domain,
-///       validation under destination rules.
-#[derive(Debug)]
-pub struct CrossDomainIntegrationBlock {
-    pub id: BlockId,
-    pub source_domain_id: DomainId,
-    pub destination_domain_id: DomainId,
-    // TODO: source_artifact_refs, destination_block, validation_state
+    #[test]
+    fn construct_escrow_record() {
+        let escrow = EscrowRecord {
+            id: EscrowId::ZERO,
+            block_id: BlockId::ZERO,
+            beneficiary: ParticipantId::ZERO,
+            amount: 100,
+            status: EscrowStatus::Held,
+            created_epoch: EpochId(1),
+            release_epoch: EpochId(5),
+        };
+        assert_eq!(escrow.status, EscrowStatus::Held);
+        assert!(escrow.release_epoch > escrow.created_epoch);
+    }
 }
