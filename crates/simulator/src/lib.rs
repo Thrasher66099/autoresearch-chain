@@ -15,41 +15,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-//! Local protocol simulator and scenario engine for AutoResearch Chain.
+//! Local protocol simulator for AutoResearch Chain.
 //!
-//! This is the primary Phase 0 deliverable. The system is built as a
-//! protocol simulator first and a networked chain second.
+//! # Phase 0.2 implementation
 //!
-//! The simulator must be able to model the complete protocol lifecycle
-//! without any real networking:
+//! The simulator composes the domain-engine, protocol-rules, fork-engine,
+//! and challenge-engine into a single local state machine that can execute
+//! protocol scenarios deterministically.
 //!
-//! - Genesis proposal and track activation
-//! - Block submission
-//! - Validator assignment and attestation
-//! - Challenge opening and resolution
-//! - Fork competition and dominance
-//! - Frontier updates and settlement
-//! - Reward accounting (escrow, staged release, slashing)
-//! - Multi-domain behavior
-//! - Cross-domain integration
-//!
-//! The simulator also serves as the foundation for adversarial testing
-//! (Phase 4), supporting scenarios like branch spam, bad genesis proposals,
-//! fork proliferation, challenge abuse, and reward starvation.
-//!
-//! # Architecture
-//!
-//! The simulator composes the protocol engine crates (domain-engine,
-//! fork-engine, challenge-engine, reward-engine) with a local state
-//! store (storage-model) and drives them through scripted or randomized
-//! scenarios.
-//!
-//! # Implementation status
-//!
-//! Not yet implemented. This is the first major engineering target.
+//! This is the primary Phase 0 deliverable: make the protocol behave
+//! locally, deterministically, and testably.
 
-// TODO: Define SimulatorState (the full protocol state for local execution).
-// TODO: Define scenario DSL or builder for scripted test scenarios.
-// TODO: Implement step-by-step execution loop.
-// TODO: Implement event/trace logging for scenario analysis.
-// TODO: Add randomized scenario generation for adversarial testing.
+pub mod state;

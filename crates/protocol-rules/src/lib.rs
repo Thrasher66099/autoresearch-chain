@@ -17,32 +17,15 @@
 
 //! Deterministic state transition logic for AutoResearch Chain.
 //!
-//! This crate defines the rules by which the protocol state evolves.
-//! It operates on types from `arc-protocol-types` and produces new states
-//! or errors — never side effects.
-//!
-//! All transitions must be deterministic: given the same prior state and
-//! the same input, every node must produce the same result.
-//!
-//! # Scope
+//! # Phase 0.2 implementation
 //!
 //! - Block submission validation
-//! - Attestation aggregation rules
-//! - Challenge opening and resolution rules
-//! - Fork activation and dominance transitions
-//! - Frontier settlement
-//! - Reward staging and slashing outcomes
-//! - Cross-domain integration rules
-//!
-//! Domain-specific lifecycle logic (genesis, track activation) lives in
-//! `arc-domain-engine`. Fork-specific logic lives in `arc-fork-engine`.
-//! This crate provides the top-level transition dispatch and coordination.
-//!
-//! # Implementation status
-//!
-//! Not yet implemented. The transition API shape is not yet decided.
+//! - Deterministic validator assignment
+//! - Attestation aggregation
+//! - Provisional acceptance / rejection / inconclusive logic
 
-// TODO: Define a StateTransition trait or equivalent dispatch model.
-// TODO: Define protocol error types for invalid transitions.
-// TODO: Decide whether transitions operate on a full state snapshot
-//       or on a more granular state accessor trait.
+pub mod attestation;
+pub mod block_lifecycle;
+pub mod config;
+pub mod error;
+pub mod validator;

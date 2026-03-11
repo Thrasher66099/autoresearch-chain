@@ -18,29 +18,17 @@
 //! Domain lifecycle, research track standards, genesis activation,
 //! and track tree management for AutoResearch Chain.
 //!
-//! This crate is responsible for:
+//! # Phase 0.2 implementation
 //!
-//! - Research Track Standard (RTS) conformance checking
-//! - Genesis block validation and activation lifecycle
-//! - Track initialization state machine (Proposed → Validating → Active | Failed)
-//! - TrackTree construction and maintenance
-//! - Domain creation, hierarchical domain relationships
-//! - DomainSpec management
-//! - Seed score verification
-//! - Successor track creation and metric migration
-//! - Domain-scoped validator pool filtering
-//!
-//! The chain is a forest of independent domain-rooted TrackTrees.
-//! This crate manages that forest.
-//!
-//! # Implementation status
-//!
-//! Not yet implemented. Genesis and domain activation are first-priority
-//! implementation targets per the build plan.
+//! This implements the first local, deterministic version of:
+//! - RTS-1 conformance checking
+//! - Genesis activation state machine
+//! - TrackTree construction from activated genesis
+//! - ProblemDomain + DomainSpec instantiation
+//! - Domain registry
 
-// TODO: Implement RTS conformance checker (start with RTS-1).
-// TODO: Implement genesis activation state machine.
-// TODO: Implement TrackTree construction from genesis.
-// TODO: Implement domain hierarchy (parent/child relationships).
-// TODO: Implement successor track creation logic.
-// TODO: Implement domain-scoped validator pool eligibility filtering.
+pub mod config;
+pub mod error;
+pub mod genesis;
+pub mod registry;
+pub mod rts;
