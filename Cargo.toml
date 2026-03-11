@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protocol-types",
+    "crates/protocol-rules",
+    "crates/domain-engine",
+    "crates/fork-engine",
+    "crates/challenge-engine",
+    "crates/reward-engine",
+    "crates/storage-model",
+    "crates/simulator",
+    "crates/node",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/autoresearch-chain/autoresearch-chain"
+
+[workspace.dependencies]
+# Internal crates — referenced by members via { workspace = true }
+arc-protocol-types = { path = "crates/protocol-types" }
+arc-protocol-rules = { path = "crates/protocol-rules" }
+arc-domain-engine = { path = "crates/domain-engine" }
+arc-fork-engine = { path = "crates/fork-engine" }
+arc-challenge-engine = { path = "crates/challenge-engine" }
+arc-reward-engine = { path = "crates/reward-engine" }
+arc-storage-model = { path = "crates/storage-model" }
+arc-simulator = { path = "crates/simulator" }
+
+# External dependencies will be added here as implementation proceeds.
+# Likely early additions: serde, thiserror, sha2/blake3.

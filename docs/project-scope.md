@@ -109,7 +109,7 @@ Stage 3 is **not yet formally specified**. It is compatible with the protocol de
 - Full long-horizon compute contribution accounting
 - Token economics (beyond staged reward structure)
 - Governance implementation details
-- Reference implementation
+- Reference implementation (architecture direction chosen — see [Implementation Plan](implementation-plan.md) — but no code exists yet)
 - Multi-domain reference client tooling (the protocol specifies multi-domain objects and guarantees; client-side tooling for domain discovery and state retrieval is not yet implemented)
 - Genesis block submission tooling (the protocol specifies genesis mechanics; no reference tooling for proposing or activating tracks exists yet)
 

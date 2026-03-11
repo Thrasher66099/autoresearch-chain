@@ -1,0 +1,12 @@
+[package]
+name = "arc-protocol-types"
+description = "Core protocol types for AutoResearch Chain: identifiers, blocks, domains, tracks, forks, challenges, rewards, and state references."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

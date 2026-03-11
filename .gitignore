@@ -1,3 +1,6 @@
+# Claude Code
+CLAUDE.md
+
 # OS
 .DS_Store
 Thumbs.db
@@ -23,6 +26,9 @@ build/
 .venv/
 venv/
 env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
 
 # Node
 node_modules/
@@ -32,6 +38,7 @@ yarn-error.log*
 
 # Rust
 target/
+Cargo.lock
 
 # Environment and secrets
 .env
@@ -44,7 +51,7 @@ target/
 *.so
 *.dylib
 
-# Training artifacts
+# Training artifacts (from research runners)
 checkpoints/
 runs/
 logs/
@@ -56,3 +63,6 @@ wandb/
 # Data
 data/
 datasets/
+
+# Simulation outputs
+simulations/output/

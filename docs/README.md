@@ -25,7 +25,14 @@ This directory contains the full project documentation for AutoResearch Chain.
 | Document | Description |
 |----------|-------------|
 | [Project Scope](project-scope.md) | What the protocol covers today vs. what is future work |
+| [Roadmap](roadmap.md) | Staged development plan from research discovery through decentralized training |
 | [Future: Stage 3 Training](future-stage-3-training.md) | The decentralized long-horizon training layer (not yet specified) |
+
+### Implementation
+
+| Document | Description |
+|----------|-------------|
+| [Implementation Plan](implementation-plan.md) | Chosen architecture direction, system split, build phases, and repository layout for the Rust-native protocol core and Python research runners |
 
 ### Reference
 
@@ -42,6 +49,7 @@ For a first read:
 2. [Project Scope](project-scope.md) for what exists vs. what is planned
 3. [White Paper](whitepaper.md) for the full rationale
 4. [Protocol v0.2](protocol-v0.2.md) for the technical details
+5. [Implementation Plan](implementation-plan.md) for the chosen architecture and build sequence
 
 ## Back to Root
 

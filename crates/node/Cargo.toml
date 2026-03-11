@@ -1,0 +1,16 @@
+[package]
+name = "arc-node"
+description = "Minimal local runtime for AutoResearch Chain. Phase 1 target; depends on protocol core being validated first."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arc-protocol-types = { workspace = true }
+arc-protocol-rules = { workspace = true }
+arc-domain-engine = { workspace = true }
+arc-fork-engine = { workspace = true }
+arc-challenge-engine = { workspace = true }
+arc-reward-engine = { workspace = true }
+arc-storage-model = { workspace = true }
+arc-simulator = { workspace = true }
