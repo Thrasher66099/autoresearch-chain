@@ -26,6 +26,8 @@ use crate::enums::{
 use crate::ids::{
     ArtifactHash, BlockId, DomainId, ForkFamilyId, GenesisBlockId, ProposerId, TrackTreeId,
 };
+use crate::metric::MetricValue;
+use crate::token::TokenAmount;
 
 /// An interface specification defining the minimum structure a research track
 /// must satisfy to participate in the protocol.
@@ -50,7 +52,8 @@ pub struct ResearchTrackStandard {
 /// It must fully declare the research problem, baseline, evaluation method,
 /// and economic parameters.
 ///
-/// Note: `PartialEq` without `Eq` because `seed_score` is `f64`.
+/// Note: `PartialEq` without `Eq` because `seed_score` uses [`MetricValue`],
+/// which wraps `f64` internally.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GenesisBlock {
     /// Unique genesis block identifier.
@@ -104,19 +107,13 @@ pub struct GenesisBlock {
 
     // --- Baseline ---
     /// Baseline score achieved by the seed recipe.
-    ///
-    /// Uses `f64` as a placeholder. A production implementation should use a
-    /// deterministic numeric representation (fixed-point or rational) to
-    /// ensure cross-platform reproducibility.
-    pub seed_score: f64,
+    pub seed_score: MetricValue,
 
     // --- Artifacts and economics ---
     /// Reference to the required submission artifact schema.
     pub artifact_schema_ref: ArtifactHash,
     /// Economic bond posted by the proposer.
-    ///
-    /// Placeholder: will use a proper token/amount type in a future phase.
-    pub seed_bond: u64,
+    pub seed_bond: TokenAmount,
     /// License status declaration for dataset and assets.
     pub license_declaration: String,
 

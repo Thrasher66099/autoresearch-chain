@@ -20,7 +20,43 @@
 use serde::{Deserialize, Serialize};
 
 use crate::enums::{ChallengeStatus, ChallengeType};
-use crate::ids::{ArtifactHash, BlockId, ChallengeId, EpochId, ParticipantId};
+use crate::ids::{
+    ArtifactHash, BlockId, ChallengeId, EpochId, ForkFamilyId, ParticipantId, ValidatorId,
+};
+use crate::token::TokenAmount;
+
+/// The subject of a challenge.
+///
+/// Challenges can target different protocol objects depending on the
+/// type of dispute. The target determines what evidence is required
+/// and how resolution proceeds.
+///
+/// This enum replaces the earlier `target_block_id: BlockId` field,
+/// which was too narrow: the protocol supports challenges against
+/// attestations, attribution claims, and dominance decisions, not
+/// just blocks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChallengeTarget {
+    /// A block's claimed metric delta (replay dispute) or a genesis
+    /// proposal's metric adequacy.
+    Block {
+        block_id: BlockId,
+    },
+    /// A specific validator's attestation on a block.
+    Attestation {
+        block_id: BlockId,
+        validator: ValidatorId,
+    },
+    /// An attribution claim by a participant on a block.
+    Attribution {
+        block_id: BlockId,
+        claimant: ParticipantId,
+    },
+    /// A fork dominance decision within a fork family.
+    DominanceDecision {
+        fork_family_id: ForkFamilyId,
+    },
+}
 
 /// A bonded dispute object in the protocol.
 ///
@@ -37,14 +73,12 @@ pub struct ChallengeRecord {
     pub id: ChallengeId,
     /// What kind of dispute this is.
     pub challenge_type: ChallengeType,
-    /// The block being challenged.
-    pub target_block_id: BlockId,
+    /// The protocol object being challenged.
+    pub target: ChallengeTarget,
     /// Who filed this challenge.
     pub challenger: ParticipantId,
     /// Slashable bond posted by the challenger.
-    ///
-    /// Placeholder: will use a proper token/amount type in a future phase.
-    pub bond: u64,
+    pub bond: TokenAmount,
     /// Reference to the challenger's supporting evidence.
     pub evidence_ref: ArtifactHash,
     /// Current challenge lifecycle status.

@@ -149,7 +149,7 @@ pub enum DomainType {
 ///
 /// Domain intents are declared at genesis and help participants understand
 /// the scope and nature of research within a domain.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DomainIntent {
     /// End-to-end training recipe improvement.
     EndToEndRecipeImprovement,

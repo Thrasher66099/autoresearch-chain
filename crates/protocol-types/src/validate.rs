@@ -20,7 +20,7 @@
 //! These functions check that protocol type instances are structurally
 //! well-formed: required fields are populated, artifact references are
 //! non-zero, numeric fields are finite, and surface declarations are
-//! non-empty.
+//! non-empty and non-overlapping.
 //!
 //! These are NOT protocol-level rules. State transitions, challenge
 //! resolution, track activation, and referential integrity belong in
@@ -36,8 +36,8 @@ use crate::validation::ValidationAttestation;
 /// A structural validation failure.
 ///
 /// Reports which field failed and why. These are structural issues
-/// (empty strings, zero hashes, non-finite floats), not protocol
-/// rule violations.
+/// (empty strings, zero hashes, non-finite floats, surface overlaps),
+/// not protocol rule violations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructuralError {
     /// The field that failed validation.
@@ -96,6 +96,23 @@ pub fn validate_genesis_block_structure(
             field: "frozen_surface",
             reason: "must contain at least one frozen path",
         });
+    }
+
+    // --- Search and frozen surfaces must not overlap ---
+    // A path appearing in both surfaces is ambiguous: is it modifiable
+    // or frozen? This must be caught before any state machine logic
+    // relies on the surface separation.
+
+    if !g.search_surface.is_empty() && !g.frozen_surface.is_empty() {
+        for path in &g.search_surface {
+            if g.frozen_surface.contains(path) {
+                errors.push(StructuralError {
+                    field: "search_surface",
+                    reason: "contains path also present in frozen_surface",
+                });
+                break;
+            }
+        }
     }
 
     // --- Artifact references must be non-zero ---
@@ -215,8 +232,9 @@ pub fn validate_block_structure(
 
 /// Validate structural invariants of a validation attestation.
 ///
-/// Checks that the replay evidence reference is populated. Does NOT
-/// check whether the block or validator exist in protocol state.
+/// Checks that the replay evidence reference is populated and that
+/// any observed delta is finite. Does NOT check whether the block or
+/// validator exist in protocol state.
 pub fn validate_attestation_structure(
     a: &ValidationAttestation,
 ) -> Result<(), Vec<StructuralError>> {
@@ -229,6 +247,15 @@ pub fn validate_attestation_structure(
         });
     }
 
+    if let Some(delta) = a.observed_delta {
+        if !delta.is_finite() {
+            errors.push(StructuralError {
+                field: "observed_delta",
+                reason: "must be finite (not NaN or infinite)",
+            });
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -239,7 +266,7 @@ pub fn validate_attestation_structure(
 /// Validate structural invariants of a challenge record.
 ///
 /// Checks that the evidence reference is populated. Does NOT check
-/// whether the target block exists or whether the challenge type is
+/// whether the target exists or whether the challenge type is
 /// applicable to the target.
 pub fn validate_challenge_structure(
     c: &ChallengeRecord,

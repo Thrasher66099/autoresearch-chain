@@ -29,6 +29,7 @@
 //! - **Group G**: Canonical fixture integrity (covered by C-F + H)
 //! - **Group H**: Serialization determinism for all major structs
 //! - **Group I**: Invariant helper coverage (covered by C-F)
+//! - **Group J**: Phase 0.1b wrapper types and tightening
 
 use std::collections::HashSet;
 
@@ -528,6 +529,19 @@ fn c_genesis_missing_seed_recipe_fails() {
     assert!(errs.iter().any(|e| e.field == "seed_recipe_ref"));
 }
 
+/// Overlapping search and frozen surfaces are rejected.
+#[test]
+fn c_genesis_overlapping_surfaces_fails() {
+    let g = invalid_genesis_overlapping_surfaces();
+    let errs = validate_genesis_block_structure(&g).unwrap_err();
+    assert!(
+        errs.iter().any(|e| e.field == "search_surface"
+            && e.reason.contains("also present in frozen_surface")),
+        "expected overlap error, got: {:?}",
+        errs
+    );
+}
+
 /// Multiple structural failures are reported together, not just the first.
 #[test]
 fn c_genesis_multiple_failures_reported() {
@@ -622,6 +636,26 @@ fn e_attestation_missing_evidence_fails() {
     assert!(errs.iter().any(|e| e.field == "replay_evidence_ref"));
 }
 
+/// Attestation with NaN observed_delta fails validation.
+#[test]
+fn e_attestation_nan_observed_delta_fails() {
+    let a = invalid_attestation_nan_observed_delta();
+    let errs = validate_attestation_structure(&a).unwrap_err();
+    assert!(
+        errs.iter().any(|e| e.field == "observed_delta"),
+        "expected observed_delta error, got: {:?}",
+        errs
+    );
+}
+
+/// Attestation with None observed_delta is valid (no measurement available).
+#[test]
+fn e_attestation_none_observed_delta_is_valid() {
+    let mut a = valid_attestation();
+    a.observed_delta = None;
+    assert!(validate_attestation_structure(&a).is_ok());
+}
+
 /// Attestation includes all expected fields and they are accessible.
 #[test]
 fn e_attestation_field_integrity() {
@@ -629,6 +663,7 @@ fn e_attestation_field_integrity() {
     assert_eq!(a.block_id, test_block_id(2));
     assert_eq!(a.validator, test_validator_id(1));
     assert_eq!(a.vote, ValidatorVote::Pass);
+    assert!(a.observed_delta.is_some());
     assert_ne!(a.replay_evidence_ref, ArtifactHash::ZERO);
     assert!(a.timestamp > 0);
 }
@@ -690,10 +725,16 @@ fn f_challenge_all_types() {
 fn f_challenge_field_integrity() {
     let c = valid_challenge();
     assert_ne!(c.id, ChallengeId::ZERO);
-    assert_ne!(c.target_block_id, BlockId::ZERO);
     assert_ne!(c.challenger, ParticipantId::ZERO);
     assert_ne!(c.evidence_ref, ArtifactHash::ZERO);
     assert_eq!(c.status, ChallengeStatus::Open);
+    // Target is a block challenge.
+    match &c.target {
+        ChallengeTarget::Block { block_id } => {
+            assert_ne!(*block_id, BlockId::ZERO);
+        }
+        _ => panic!("expected ChallengeTarget::Block"),
+    }
 }
 
 // =======================================================================
@@ -933,7 +974,7 @@ fn h_escrow_record_serialization_determinism() {
         id: EscrowId::from_bytes([1u8; 32]),
         block_id: test_block_id(1),
         beneficiary: test_participant_id(1),
-        amount: 500,
+        amount: TokenAmount::new(500),
         status: EscrowStatus::Held,
         created_epoch: EpochId(1),
         release_epoch: EpochId(10),
@@ -997,7 +1038,7 @@ fn h_metric_integrity_policy_serialization_determinism() {
         metric_id: "test_accuracy".to_string(),
         metric_direction: MetricDirection::HigherBetter,
         evaluation_harness_ref: test_artifact_hash(1),
-        tolerance: 0.005,
+        tolerance: MetricValue::new(0.005),
         max_replay_budget_secs: 3600,
     };
     assert_deterministic_serialization(&p, "MetricIntegrityPolicy");
@@ -1064,6 +1105,7 @@ fn i_all_invalid_fixtures_fail() {
     assert!(validate_genesis_block_structure(&invalid_genesis_missing_hardware_class()).is_err());
     assert!(validate_genesis_block_structure(&invalid_genesis_missing_eval_harness()).is_err());
     assert!(validate_genesis_block_structure(&invalid_genesis_missing_seed_recipe()).is_err());
+    assert!(validate_genesis_block_structure(&invalid_genesis_overlapping_surfaces()).is_err());
 
     // Block variants
     assert!(validate_block_structure(&invalid_block_missing_evidence()).is_err());
@@ -1074,6 +1116,7 @@ fn i_all_invalid_fixtures_fail() {
 
     // Attestation variants
     assert!(validate_attestation_structure(&invalid_attestation_missing_evidence()).is_err());
+    assert!(validate_attestation_structure(&invalid_attestation_nan_observed_delta()).is_err());
 
     // Challenge variants
     assert!(validate_challenge_structure(&invalid_challenge_missing_evidence()).is_err());
@@ -1096,12 +1139,14 @@ fn i_invalid_fixtures_single_fault() {
         ("genesis/hardware", validate_genesis_block_structure(&invalid_genesis_missing_hardware_class())),
         ("genesis/eval_harness", validate_genesis_block_structure(&invalid_genesis_missing_eval_harness())),
         ("genesis/seed_recipe", validate_genesis_block_structure(&invalid_genesis_missing_seed_recipe())),
+        ("genesis/overlap", validate_genesis_block_structure(&invalid_genesis_overlapping_surfaces())),
         ("block/evidence", validate_block_structure(&invalid_block_missing_evidence())),
         ("block/child_state", validate_block_structure(&invalid_block_missing_child_state())),
         ("block/diff", validate_block_structure(&invalid_block_missing_diff())),
         ("block/nan_delta", validate_block_structure(&invalid_block_nan_delta())),
         ("block/inf_delta", validate_block_structure(&invalid_block_inf_delta())),
         ("attestation/evidence", validate_attestation_structure(&invalid_attestation_missing_evidence())),
+        ("attestation/nan_delta", validate_attestation_structure(&invalid_attestation_nan_observed_delta())),
         ("challenge/evidence", validate_challenge_structure(&invalid_challenge_missing_evidence())),
     ];
 
@@ -1116,4 +1161,205 @@ fn i_invalid_fixtures_single_fault() {
             errs
         );
     }
+}
+
+// =======================================================================
+// Group J — Phase 0.1b wrapper types and tightening
+// =======================================================================
+
+/// MetricValue wraps f64 and provides is_finite().
+#[test]
+fn j_metric_value_construction_and_access() {
+    let mv = MetricValue::new(0.95);
+    assert_eq!(mv.as_f64(), 0.95);
+    assert!(mv.is_finite());
+
+    let nan = MetricValue::new(f64::NAN);
+    assert!(!nan.is_finite());
+
+    let inf = MetricValue::new(f64::INFINITY);
+    assert!(!inf.is_finite());
+}
+
+/// MetricValue round-trips through serde.
+#[test]
+fn j_metric_value_serde_roundtrip() {
+    let mv = MetricValue::new(0.123456);
+    let json = serde_json::to_string(&mv).unwrap();
+    let recovered: MetricValue = serde_json::from_str(&json).unwrap();
+    assert_eq!(mv, recovered);
+}
+
+/// MetricValue display shows the numeric value.
+#[test]
+fn j_metric_value_display() {
+    let mv = MetricValue::new(0.93);
+    let displayed = format!("{}", mv);
+    assert!(displayed.contains("0.93"));
+}
+
+/// TokenAmount wraps u64 and provides basic accessors.
+#[test]
+fn j_token_amount_construction_and_access() {
+    let t = TokenAmount::new(1000);
+    assert_eq!(t.as_u64(), 1000);
+    assert!(!t.is_zero());
+
+    let zero = TokenAmount::ZERO;
+    assert!(zero.is_zero());
+    assert_eq!(zero.as_u64(), 0);
+}
+
+/// TokenAmount round-trips through serde.
+#[test]
+fn j_token_amount_serde_roundtrip() {
+    let t = TokenAmount::new(42);
+    let json = serde_json::to_string(&t).unwrap();
+    let recovered: TokenAmount = serde_json::from_str(&json).unwrap();
+    assert_eq!(t, recovered);
+}
+
+/// TokenAmount supports ordering.
+#[test]
+fn j_token_amount_ordering() {
+    let a = TokenAmount::new(100);
+    let b = TokenAmount::new(200);
+    assert!(a < b);
+    assert_eq!(a, TokenAmount::new(100));
+}
+
+/// TokenAmount display shows the numeric value.
+#[test]
+fn j_token_amount_display() {
+    let t = TokenAmount::new(500);
+    assert_eq!(format!("{}", t), "500");
+}
+
+/// ChallengeTarget variants serialize distinctly and round-trip.
+#[test]
+fn j_challenge_target_all_variants_roundtrip() {
+    let targets = [
+        ChallengeTarget::Block {
+            block_id: test_block_id(1),
+        },
+        ChallengeTarget::Attestation {
+            block_id: test_block_id(1),
+            validator: test_validator_id(1),
+        },
+        ChallengeTarget::Attribution {
+            block_id: test_block_id(1),
+            claimant: test_participant_id(1),
+        },
+        ChallengeTarget::DominanceDecision {
+            fork_family_id: ForkFamilyId::from_bytes([1u8; 32]),
+        },
+    ];
+    for target in &targets {
+        let json = serde_json::to_string(target).unwrap();
+        let recovered: ChallengeTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(target, &recovered);
+    }
+}
+
+/// ChallengeTarget variants are distinct from each other.
+#[test]
+fn j_challenge_target_variants_are_distinct() {
+    let block = ChallengeTarget::Block {
+        block_id: test_block_id(1),
+    };
+    let attestation = ChallengeTarget::Attestation {
+        block_id: test_block_id(1),
+        validator: test_validator_id(1),
+    };
+    let attribution = ChallengeTarget::Attribution {
+        block_id: test_block_id(1),
+        claimant: test_participant_id(1),
+    };
+    let dominance = ChallengeTarget::DominanceDecision {
+        fork_family_id: ForkFamilyId::from_bytes([1u8; 32]),
+    };
+
+    assert_ne!(block, attestation);
+    assert_ne!(attestation, attribution);
+    assert_ne!(attribution, dominance);
+    assert_ne!(dominance, block);
+}
+
+/// ChallengeRecord with different target variants serializes correctly.
+#[test]
+fn j_challenge_with_attestation_target_roundtrips() {
+    let c = ChallengeRecord {
+        id: test_challenge_id(2),
+        challenge_type: ChallengeType::AttestationFraud,
+        target: ChallengeTarget::Attestation {
+            block_id: test_block_id(2),
+            validator: test_validator_id(1),
+        },
+        challenger: test_participant_id(3),
+        bond: TokenAmount::new(300),
+        evidence_ref: test_artifact_hash(81),
+        status: ChallengeStatus::Open,
+        epoch_id: EpochId(3),
+        timestamp: 1700004000,
+    };
+    assert_stable_roundtrip(&c, "ChallengeRecord(AttestationFraud)");
+}
+
+/// DomainIntent now derives Copy.
+#[test]
+fn j_domain_intent_is_copy() {
+    let intent = DomainIntent::EndToEndRecipeImprovement;
+    let copied = intent; // Copy, not move.
+    assert_eq!(intent, copied);
+}
+
+/// ValidationAttestation observed_delta field works with None.
+#[test]
+fn j_attestation_observed_delta_none_roundtrips() {
+    let a = ValidationAttestation {
+        block_id: test_block_id(2),
+        validator: test_validator_id(1),
+        vote: ValidatorVote::Inconclusive,
+        observed_delta: None,
+        replay_evidence_ref: test_artifact_hash(70),
+        timestamp: 1700002000,
+    };
+    assert_stable_roundtrip(&a, "ValidationAttestation(no delta)");
+}
+
+/// ValidationAttestation observed_delta field works with Some.
+#[test]
+fn j_attestation_observed_delta_some_roundtrips() {
+    let a = valid_attestation();
+    assert!(a.observed_delta.is_some());
+    assert_stable_roundtrip(&a, "ValidationAttestation(with delta)");
+}
+
+/// Search/frozen overlap: disjoint surfaces pass validation.
+#[test]
+fn j_disjoint_surfaces_pass() {
+    let g = valid_genesis_block();
+    // Fixture has disjoint surfaces by default.
+    assert!(validate_genesis_block_structure(&g).is_ok());
+}
+
+/// Search/frozen overlap: exact string match is detected.
+#[test]
+fn j_overlapping_surfaces_detected() {
+    let mut g = valid_genesis_block();
+    g.search_surface.push("eval/".to_string());
+    let errs = validate_genesis_block_structure(&g).unwrap_err();
+    assert!(errs.iter().any(|e| e.field == "search_surface"));
+}
+
+/// Search/frozen overlap: partial prefix overlap is NOT detected
+/// (structural validation uses exact string match, not path-aware
+/// containment checking — that is a protocol-level concern).
+#[test]
+fn j_partial_prefix_overlap_not_detected() {
+    let mut g = valid_genesis_block();
+    // "eval/metrics/" is a sub-path of "eval/", but not an exact match.
+    g.search_surface.push("eval/metrics/".to_string());
+    // Structural validation only checks exact string equality.
+    assert!(validate_genesis_block_structure(&g).is_ok());
 }

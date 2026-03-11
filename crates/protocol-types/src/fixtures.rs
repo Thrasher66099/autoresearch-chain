@@ -32,11 +32,13 @@
 //! - `invalid_*_bad_*()` — returns an instance with a malformed field
 
 use crate::block::Block;
-use crate::challenge::ChallengeRecord;
+use crate::challenge::{ChallengeRecord, ChallengeTarget};
 use crate::enums::*;
 use crate::frontier::CanonicalFrontierState;
 use crate::genesis::{DatasetSplits, GenesisBlock};
 use crate::ids::*;
+use crate::metric::MetricValue;
+use crate::token::TokenAmount;
 use crate::validation::ValidationAttestation;
 
 // -----------------------------------------------------------------------
@@ -123,9 +125,9 @@ pub fn valid_genesis_block() -> GenesisBlock {
         hardware_class: "RTX 4090".to_string(),
         time_budget_secs: 3600,
         seed_environment_manifest_ref: test_artifact_hash(40),
-        seed_score: 0.9300,
+        seed_score: MetricValue::new(0.9300),
         artifact_schema_ref: test_artifact_hash(50),
-        seed_bond: 1000,
+        seed_bond: TokenAmount::new(1000),
         license_declaration: "MIT".to_string(),
         timestamp: 1700000000,
     }
@@ -173,14 +175,14 @@ pub fn invalid_genesis_missing_research_target() -> GenesisBlock {
 /// Genesis block with NaN seed_score.
 pub fn invalid_genesis_nan_seed_score() -> GenesisBlock {
     let mut g = valid_genesis_block();
-    g.seed_score = f64::NAN;
+    g.seed_score = MetricValue::new(f64::NAN);
     g
 }
 
 /// Genesis block with infinite seed_score.
 pub fn invalid_genesis_inf_seed_score() -> GenesisBlock {
     let mut g = valid_genesis_block();
-    g.seed_score = f64::INFINITY;
+    g.seed_score = MetricValue::new(f64::INFINITY);
     g
 }
 
@@ -212,6 +214,15 @@ pub fn invalid_genesis_missing_seed_recipe() -> GenesisBlock {
     g
 }
 
+/// Genesis block with a path appearing in both search_surface and
+/// frozen_surface.
+pub fn invalid_genesis_overlapping_surfaces() -> GenesisBlock {
+    let mut g = valid_genesis_block();
+    // Add a path from frozen_surface into search_surface.
+    g.search_surface.push("eval/".to_string());
+    g
+}
+
 // -----------------------------------------------------------------------
 // Valid block
 // -----------------------------------------------------------------------
@@ -228,10 +239,10 @@ pub fn valid_block() -> Block {
         proposer: test_proposer_id(2),
         child_state_ref: test_artifact_hash(60),
         diff_ref: test_artifact_hash(61),
-        claimed_metric_delta: 0.015,
+        claimed_metric_delta: MetricValue::new(0.015),
         evidence_bundle_hash: test_artifact_hash(62),
-        fee: 10,
-        bond: 500,
+        fee: TokenAmount::new(10),
+        bond: TokenAmount::new(500),
         epoch_id: EpochId(1),
         status: BlockStatus::Submitted,
         timestamp: 1700001000,
@@ -266,14 +277,14 @@ pub fn invalid_block_missing_diff() -> Block {
 /// Block with NaN claimed_metric_delta.
 pub fn invalid_block_nan_delta() -> Block {
     let mut b = valid_block();
-    b.claimed_metric_delta = f64::NAN;
+    b.claimed_metric_delta = MetricValue::new(f64::NAN);
     b
 }
 
 /// Block with infinite claimed_metric_delta.
 pub fn invalid_block_inf_delta() -> Block {
     let mut b = valid_block();
-    b.claimed_metric_delta = f64::NEG_INFINITY;
+    b.claimed_metric_delta = MetricValue::new(f64::NEG_INFINITY);
     b
 }
 
@@ -282,11 +293,14 @@ pub fn invalid_block_inf_delta() -> Block {
 // -----------------------------------------------------------------------
 
 /// A structurally valid validation attestation with a Pass vote.
+///
+/// Includes an observed_delta matching the claimed improvement.
 pub fn valid_attestation() -> ValidationAttestation {
     ValidationAttestation {
         block_id: test_block_id(2),
         validator: test_validator_id(1),
         vote: ValidatorVote::Pass,
+        observed_delta: Some(MetricValue::new(0.014)),
         replay_evidence_ref: test_artifact_hash(70),
         timestamp: 1700002000,
     }
@@ -299,6 +313,13 @@ pub fn invalid_attestation_missing_evidence() -> ValidationAttestation {
     a
 }
 
+/// Attestation with NaN observed_delta.
+pub fn invalid_attestation_nan_observed_delta() -> ValidationAttestation {
+    let mut a = valid_attestation();
+    a.observed_delta = Some(MetricValue::new(f64::NAN));
+    a
+}
+
 // -----------------------------------------------------------------------
 // Valid challenge record
 // -----------------------------------------------------------------------
@@ -308,9 +329,11 @@ pub fn valid_challenge() -> ChallengeRecord {
     ChallengeRecord {
         id: test_challenge_id(1),
         challenge_type: ChallengeType::BlockReplay,
-        target_block_id: test_block_id(2),
+        target: ChallengeTarget::Block {
+            block_id: test_block_id(2),
+        },
         challenger: test_participant_id(3),
-        bond: 250,
+        bond: TokenAmount::new(250),
         evidence_ref: test_artifact_hash(80),
         status: ChallengeStatus::Open,
         epoch_id: EpochId(2),

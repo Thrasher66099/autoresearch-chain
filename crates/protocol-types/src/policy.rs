@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::enums::MetricDirection;
 use crate::genesis::DatasetSplits;
 use crate::ids::{ArtifactHash, GenesisBlockId};
+use crate::metric::MetricValue;
 
 /// Per-track policy defining evaluation metric integrity requirements.
 ///
@@ -30,7 +31,8 @@ use crate::ids::{ArtifactHash, GenesisBlockId};
 /// track activation. If the metric is found flawed, a successor track must
 /// be created rather than silently mutating the existing one.
 ///
-/// Note: `PartialEq` without `Eq` because `tolerance` is `f64`.
+/// Note: `PartialEq` without `Eq` because `tolerance` uses [`MetricValue`],
+/// which wraps `f64` internally.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MetricIntegrityPolicy {
     /// The track this policy belongs to (identified by genesis block).
@@ -42,10 +44,7 @@ pub struct MetricIntegrityPolicy {
     /// Reference to the frozen evaluation harness.
     pub evaluation_harness_ref: ArtifactHash,
     /// Acceptable tolerance for metric reproduction.
-    ///
-    /// Uses `f64` as a placeholder. A production implementation should use a
-    /// deterministic numeric representation.
-    pub tolerance: f64,
+    pub tolerance: MetricValue,
     /// Maximum wall-clock seconds allowed for a single replay.
     pub max_replay_budget_secs: u64,
 }

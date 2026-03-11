@@ -21,12 +21,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::enums::ValidatorVote;
 use crate::ids::{ArtifactHash, BlockId, ValidatorId};
+use crate::metric::MetricValue;
 
 /// A signed validator claim about whether a proposed improvement reproduces.
 ///
 /// Validators replay the proposer's claimed improvement using the evidence
 /// bundle and cast a vote on whether the metric delta holds within tolerance.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The `observed_delta` field carries the validator's measured metric delta
+/// from replay. This supports future aggregation, challenge comparison, and
+/// replay analysis. It is `Option` because some vote outcomes (e.g.,
+/// environment failures producing `Inconclusive`) may not yield a
+/// meaningful measurement.
+///
+/// Note: `PartialEq` without `Eq` because `observed_delta` uses
+/// [`MetricValue`], which wraps `f64` internally.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ValidationAttestation {
     /// The block being validated.
     pub block_id: BlockId,
@@ -34,6 +44,10 @@ pub struct ValidationAttestation {
     pub validator: ValidatorId,
     /// The validator's verdict.
     pub vote: ValidatorVote,
+    /// The metric delta observed by the validator during replay.
+    ///
+    /// `None` if the replay did not produce a usable measurement.
+    pub observed_delta: Option<MetricValue>,
     /// Reference to the validator's replay evidence (logs, outputs).
     pub replay_evidence_ref: ArtifactHash,
     /// Unix timestamp of attestation.

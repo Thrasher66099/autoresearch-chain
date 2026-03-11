@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::enums::BlockStatus;
 use crate::ids::{ArtifactHash, BlockId, DomainId, EpochId, ProposerId};
+use crate::metric::MetricValue;
+use crate::token::TokenAmount;
 
 /// A claim that a child training recipe improves on a parent training recipe.
 ///
@@ -28,7 +30,8 @@ use crate::ids::{ArtifactHash, BlockId, DomainId, EpochId, ProposerId};
 /// Each block references its parent state, proposes a diff, claims a metric
 /// improvement, and includes an evidence bundle hash for validators to replay.
 ///
-/// Note: `PartialEq` without `Eq` because `claimed_metric_delta` is `f64`.
+/// Note: `PartialEq` without `Eq` because `claimed_metric_delta` uses
+/// [`MetricValue`], which wraps `f64` internally.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     /// Unique block identifier.
@@ -45,20 +48,13 @@ pub struct Block {
     /// Reference to the code diff (parent to child).
     pub diff_ref: ArtifactHash,
     /// Claimed metric improvement over parent.
-    ///
-    /// Uses `f64` as a placeholder. A production implementation should use a
-    /// deterministic numeric representation.
-    pub claimed_metric_delta: f64,
+    pub claimed_metric_delta: MetricValue,
     /// Hash of the full evidence bundle for replay verification.
     pub evidence_bundle_hash: ArtifactHash,
     /// Submission fee.
-    ///
-    /// Placeholder: will use a proper token/amount type in a future phase.
-    pub fee: u64,
+    pub fee: TokenAmount,
     /// Slashable bond posted by the proposer.
-    ///
-    /// Placeholder: will use a proper token/amount type in a future phase.
-    pub bond: u64,
+    pub bond: TokenAmount,
     /// Protocol epoch at time of submission.
     pub epoch_id: EpochId,
     /// Current lifecycle status.

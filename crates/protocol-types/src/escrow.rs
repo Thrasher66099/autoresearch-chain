@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::enums::{AttributionType, EscrowStatus};
 use crate::ids::{BlockId, EpochId, EscrowId, ParticipantId};
+use crate::token::TokenAmount;
 
 /// Temporary holding of rewards pending challenge-window expiration.
 ///
@@ -36,9 +37,7 @@ pub struct EscrowRecord {
     /// Who will receive the funds if released.
     pub beneficiary: ParticipantId,
     /// Escrowed amount.
-    ///
-    /// Placeholder: will use a proper token/amount type in a future phase.
-    pub amount: u64,
+    pub amount: TokenAmount,
     /// Current escrow status.
     pub status: EscrowStatus,
     /// Epoch at which the escrow was created.

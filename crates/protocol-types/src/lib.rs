@@ -29,11 +29,13 @@
 //!
 //! - [`ids`] --- Strongly typed identifier and reference wrappers
 //! - [`enums`] --- Canonical protocol enums (statuses, classifications, votes)
+//! - [`metric`] --- Protocol metric value abstraction ([`MetricValue`])
+//! - [`token`] --- Protocol token amount abstraction ([`TokenAmount`])
 //! - [`domain`] --- Problem domain and domain specification
 //! - [`genesis`] --- Genesis block, research track standards, track initialization
 //! - [`block`] --- Block and epoch types
 //! - [`validation`] --- Validation attestations and evidence bundles
-//! - [`challenge`] --- Challenge records
+//! - [`challenge`] --- Challenge records and challenge target modeling
 //! - [`frontier`] --- Canonical frontier state, materialized state, codebase references
 //! - [`fork`] --- Fork families
 //! - [`escrow`] --- Escrow records and attribution claims
@@ -43,6 +45,8 @@
 
 pub mod ids;
 pub mod enums;
+pub mod metric;
+pub mod token;
 pub mod domain;
 pub mod genesis;
 pub mod block;
@@ -60,6 +64,8 @@ pub mod fixtures;
 // `use arc_protocol_types::ids::BlockId;` --- both work.
 pub use ids::*;
 pub use enums::*;
+pub use metric::*;
+pub use token::*;
 pub use domain::*;
 pub use genesis::*;
 pub use block::*;
@@ -240,6 +246,7 @@ mod tests {
             block_id: BlockId::ZERO,
             validator: ValidatorId::ZERO,
             vote: ValidatorVote::Pass,
+            observed_delta: Some(MetricValue::new(0.01)),
             replay_evidence_ref: ArtifactHash::ZERO,
             timestamp: 1000,
         };
@@ -274,7 +281,7 @@ mod tests {
             id: EscrowId::ZERO,
             block_id: BlockId::ZERO,
             beneficiary: ParticipantId::ZERO,
-            amount: 100,
+            amount: TokenAmount::new(100),
             status: EscrowStatus::Held,
             created_epoch: EpochId(1),
             release_epoch: EpochId(5),
@@ -314,9 +321,9 @@ mod tests {
             hardware_class: "RTX 4090".to_string(),
             time_budget_secs: 3600,
             seed_environment_manifest_ref: ArtifactHash::ZERO,
-            seed_score: 0.93,
+            seed_score: MetricValue::new(0.93),
             artifact_schema_ref: ArtifactHash::ZERO,
-            seed_bond: 1000,
+            seed_bond: TokenAmount::new(1000),
             license_declaration: "MIT".to_string(),
             timestamp: 1700000000,
         };
@@ -333,10 +340,10 @@ mod tests {
             proposer: ProposerId::ZERO,
             child_state_ref: ArtifactHash::from_bytes([2u8; 32]),
             diff_ref: ArtifactHash::from_bytes([3u8; 32]),
-            claimed_metric_delta: 0.02,
+            claimed_metric_delta: MetricValue::new(0.02),
             evidence_bundle_hash: ArtifactHash::from_bytes([4u8; 32]),
-            fee: 10,
-            bond: 100,
+            fee: TokenAmount::new(10),
+            bond: TokenAmount::new(100),
             epoch_id: EpochId(1),
             status: BlockStatus::Submitted,
             timestamp: 1700000100,
@@ -350,9 +357,11 @@ mod tests {
         let challenge = ChallengeRecord {
             id: ChallengeId::ZERO,
             challenge_type: ChallengeType::BlockReplay,
-            target_block_id: BlockId::ZERO,
+            target: ChallengeTarget::Block {
+                block_id: BlockId::ZERO,
+            },
             challenger: ParticipantId::ZERO,
-            bond: 500,
+            bond: TokenAmount::new(500),
             evidence_ref: ArtifactHash::ZERO,
             status: ChallengeStatus::Open,
             epoch_id: EpochId(2),
@@ -414,7 +423,7 @@ mod tests {
             id: EscrowId::ZERO,
             block_id: BlockId::ZERO,
             beneficiary: ParticipantId::ZERO,
-            amount: 100,
+            amount: TokenAmount::new(100),
             status: EscrowStatus::Held,
             created_epoch: EpochId(1),
             release_epoch: EpochId(5),
