@@ -9,15 +9,20 @@ use crate::config::ValidationConfig;
 #[derive(Clone, Debug)]
 pub struct AttestationSummary {
     pub total: u32,
+    /// Total Pass attestations (with or without observed_delta).
     pub pass_count: u32,
+    /// Pass attestations that include `observed_delta`.
+    /// Only these count toward acceptance quorum — a Pass without
+    /// observed truth is not a truth-bearing attestation.
+    pub truth_bearing_pass_count: u32,
     pub fail_count: u32,
     pub inconclusive_count: u32,
     pub fraud_count: u32,
-    /// Mean of observed deltas from Pass votes (if any).
+    /// Mean of observed deltas from truth-bearing Pass votes (if any).
     pub mean_observed_delta: Option<f64>,
-    /// Min observed delta from Pass votes.
+    /// Min observed delta from truth-bearing Pass votes.
     pub min_observed_delta: Option<f64>,
-    /// Max observed delta from Pass votes.
+    /// Max observed delta from truth-bearing Pass votes.
     pub max_observed_delta: Option<f64>,
 }
 
@@ -33,8 +38,14 @@ pub enum ProvisionalOutcome {
 }
 
 /// Aggregate attestations into a summary.
+///
+/// Distinguishes between total Pass votes and truth-bearing Pass votes
+/// (those with `observed_delta`). Only truth-bearing Passes count toward
+/// acceptance quorum — the protocol requires validator-observed truth
+/// for acceptance, not merely a vote.
 pub fn aggregate_attestations(attestations: &[ValidationAttestation]) -> AttestationSummary {
     let mut pass = 0u32;
+    let mut truth_bearing_pass = 0u32;
     let mut fail = 0u32;
     let mut inconclusive = 0u32;
     let mut fraud = 0u32;
@@ -45,6 +56,7 @@ pub fn aggregate_attestations(attestations: &[ValidationAttestation]) -> Attesta
             ValidatorVote::Pass => {
                 pass += 1;
                 if let Some(delta) = att.observed_delta {
+                    truth_bearing_pass += 1;
                     deltas.push(delta.as_f64());
                 }
             }
@@ -67,6 +79,7 @@ pub fn aggregate_attestations(attestations: &[ValidationAttestation]) -> Attesta
     AttestationSummary {
         total: attestations.len() as u32,
         pass_count: pass,
+        truth_bearing_pass_count: truth_bearing_pass,
         fail_count: fail,
         inconclusive_count: inconclusive,
         fraud_count: fraud,
@@ -93,8 +106,10 @@ pub fn evaluate_provisional_outcome(
         return ProvisionalOutcome::Rejected;
     }
 
-    // Acceptance quorum.
-    if summary.pass_count >= config.acceptance_quorum {
+    // Acceptance quorum: only truth-bearing Pass attestations (those with
+    // observed_delta) count. A Pass without observed truth is not sufficient
+    // to accept a block — the protocol requires constructible protocol truth.
+    if summary.truth_bearing_pass_count >= config.acceptance_quorum {
         return ProvisionalOutcome::Accepted;
     }
 
@@ -147,6 +162,7 @@ mod tests {
         ];
         let summary = aggregate_attestations(&atts);
         assert_eq!(summary.pass_count, 3);
+        assert_eq!(summary.truth_bearing_pass_count, 3);
         assert_eq!(summary.fail_count, 0);
         assert!(summary.mean_observed_delta.is_some());
         assert!((summary.mean_observed_delta.unwrap() - 0.02).abs() < 1e-10);
@@ -161,8 +177,37 @@ mod tests {
         ];
         let summary = aggregate_attestations(&atts);
         assert_eq!(summary.pass_count, 1);
+        assert_eq!(summary.truth_bearing_pass_count, 1);
         assert_eq!(summary.fail_count, 1);
         assert_eq!(summary.inconclusive_count, 1);
+    }
+
+    #[test]
+    fn aggregate_pass_without_delta_not_truth_bearing() {
+        let atts = vec![
+            make_attestation(ValidatorVote::Pass, Some(0.01)),
+            make_attestation(ValidatorVote::Pass, None),  // Pass without observed_delta
+            make_attestation(ValidatorVote::Pass, Some(0.03)),
+        ];
+        let summary = aggregate_attestations(&atts);
+        assert_eq!(summary.pass_count, 3);
+        assert_eq!(summary.truth_bearing_pass_count, 2);
+        // Mean should only include the two truth-bearing deltas.
+        let mean = summary.mean_observed_delta.unwrap();
+        assert!((mean - 0.02).abs() < 1e-10);
+    }
+
+    #[test]
+    fn aggregate_all_pass_no_deltas() {
+        let atts = vec![
+            make_attestation(ValidatorVote::Pass, None),
+            make_attestation(ValidatorVote::Pass, None),
+            make_attestation(ValidatorVote::Pass, None),
+        ];
+        let summary = aggregate_attestations(&atts);
+        assert_eq!(summary.pass_count, 3);
+        assert_eq!(summary.truth_bearing_pass_count, 0);
+        assert!(summary.mean_observed_delta.is_none());
     }
 
     #[test]
@@ -171,6 +216,7 @@ mod tests {
         let summary = AttestationSummary {
             total: 3,
             pass_count: 2,
+            truth_bearing_pass_count: 2,
             fail_count: 0,
             inconclusive_count: 1,
             fraud_count: 0,
@@ -182,11 +228,49 @@ mod tests {
     }
 
     #[test]
+    fn pass_without_delta_does_not_count_toward_acceptance() {
+        let config = ValidationConfig::default(); // acceptance_quorum = 2
+        // 3 Pass votes but only 1 has observed_delta.
+        let summary = AttestationSummary {
+            total: 3,
+            pass_count: 3,
+            truth_bearing_pass_count: 1,
+            fail_count: 0,
+            inconclusive_count: 0,
+            fraud_count: 0,
+            mean_observed_delta: Some(0.01),
+            min_observed_delta: Some(0.01),
+            max_observed_delta: Some(0.01),
+        };
+        // Despite 3 Pass votes, only 1 is truth-bearing — below quorum of 2.
+        assert_ne!(evaluate_provisional_outcome(&summary, &config), ProvisionalOutcome::Accepted);
+    }
+
+    #[test]
+    fn all_pass_no_delta_not_accepted() {
+        let config = ValidationConfig::default(); // acceptance_quorum = 2
+        let summary = AttestationSummary {
+            total: 3,
+            pass_count: 3,
+            truth_bearing_pass_count: 0,
+            fail_count: 0,
+            inconclusive_count: 0,
+            fraud_count: 0,
+            mean_observed_delta: None,
+            min_observed_delta: None,
+            max_observed_delta: None,
+        };
+        // 3 Pass votes, 0 truth-bearing — cannot accept.
+        assert_ne!(evaluate_provisional_outcome(&summary, &config), ProvisionalOutcome::Accepted);
+    }
+
+    #[test]
     fn provisional_rejection_by_fail() {
         let config = ValidationConfig::default();
         let summary = AttestationSummary {
             total: 3,
             pass_count: 1,
+            truth_bearing_pass_count: 1,
             fail_count: 2,
             inconclusive_count: 0,
             fraud_count: 0,
@@ -203,6 +287,7 @@ mod tests {
         let summary = AttestationSummary {
             total: 3,
             pass_count: 2,
+            truth_bearing_pass_count: 2,
             fail_count: 0,
             inconclusive_count: 0,
             fraud_count: 1,
@@ -219,6 +304,7 @@ mod tests {
         let summary = AttestationSummary {
             total: 3,
             pass_count: 1,
+            truth_bearing_pass_count: 1,
             fail_count: 0,
             inconclusive_count: 2,
             fraud_count: 0,
@@ -234,6 +320,7 @@ mod tests {
         let summary = AttestationSummary {
             total: 3,
             pass_count: 3,
+            truth_bearing_pass_count: 3,
             fail_count: 0,
             inconclusive_count: 0,
             fraud_count: 0,

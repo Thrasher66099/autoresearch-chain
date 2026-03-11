@@ -59,6 +59,12 @@ pub enum RewardError {
         from: EscrowStatus,
         to: EscrowStatus,
     },
+    /// Escrow release attempted before the release epoch.
+    EscrowReleaseTooEarly {
+        escrow_id: EscrowId,
+        current_epoch: EpochId,
+        release_epoch: EpochId,
+    },
 }
 
 impl std::fmt::Display for RewardError {
@@ -69,6 +75,17 @@ impl std::fmt::Display for RewardError {
                     f,
                     "escrow {} invalid transition {:?} -> {:?}",
                     escrow_id, from, to
+                )
+            }
+            Self::EscrowReleaseTooEarly {
+                escrow_id,
+                current_epoch,
+                release_epoch,
+            } => {
+                write!(
+                    f,
+                    "escrow {} release attempted at epoch {} but not releasable until epoch {}",
+                    escrow_id, current_epoch.0, release_epoch.0
                 )
             }
         }
@@ -105,13 +122,27 @@ pub fn create_block_escrow(
 /// Called when a block settles without upheld challenges. The proposer's
 /// bond (and eventually reward) become available.
 ///
+/// Release is only permitted at or after `release_epoch`, enforcing the
+/// challenge survival boundary. Attempting to release before the challenge
+/// window has elapsed is an error.
+///
 /// Transition: Held → Released.
-pub fn release_escrow(record: &mut EscrowRecord) -> Result<(), RewardError> {
+pub fn release_escrow(
+    record: &mut EscrowRecord,
+    current_epoch: EpochId,
+) -> Result<(), RewardError> {
     if record.status != EscrowStatus::Held {
         return Err(RewardError::InvalidEscrowTransition {
             escrow_id: record.id,
             from: record.status,
             to: EscrowStatus::Released,
+        });
+    }
+    if current_epoch.0 < record.release_epoch.0 {
+        return Err(RewardError::EscrowReleaseTooEarly {
+            escrow_id: record.id,
+            current_epoch,
+            release_epoch: record.release_epoch,
         });
     }
     record.status = EscrowStatus::Released;
@@ -164,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn release_held_escrow() {
+    fn release_held_escrow_at_release_epoch() {
         let mut escrow = create_block_escrow(
             EscrowId::from_bytes([1u8; 32]),
             test_block_id(10),
@@ -173,8 +204,56 @@ mod tests {
             EpochId(3),
             &default_config(),
         );
-        release_escrow(&mut escrow).unwrap();
+        // release_epoch is 8 (3 + 5). Release at exactly epoch 8 should work.
+        release_escrow(&mut escrow, EpochId(8)).unwrap();
         assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    #[test]
+    fn release_held_escrow_after_release_epoch() {
+        let mut escrow = create_block_escrow(
+            EscrowId::from_bytes([1u8; 32]),
+            test_block_id(10),
+            test_participant_id(1),
+            TokenAmount::new(500),
+            EpochId(3),
+            &default_config(),
+        );
+        // Release at epoch 10 (after release_epoch 8) should work.
+        release_escrow(&mut escrow, EpochId(10)).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    #[test]
+    fn cannot_release_escrow_before_release_epoch() {
+        let mut escrow = create_block_escrow(
+            EscrowId::from_bytes([1u8; 32]),
+            test_block_id(10),
+            test_participant_id(1),
+            TokenAmount::new(500),
+            EpochId(3),
+            &default_config(),
+        );
+        // release_epoch is 8. Trying to release at epoch 5 should fail.
+        let err = release_escrow(&mut escrow, EpochId(5)).unwrap_err();
+        assert!(matches!(err, RewardError::EscrowReleaseTooEarly { .. }));
+        // Escrow should still be Held.
+        assert_eq!(escrow.status, EscrowStatus::Held);
+    }
+
+    #[test]
+    fn cannot_release_escrow_one_epoch_early() {
+        let mut escrow = create_block_escrow(
+            EscrowId::from_bytes([1u8; 32]),
+            test_block_id(10),
+            test_participant_id(1),
+            TokenAmount::new(500),
+            EpochId(3),
+            &default_config(),
+        );
+        // release_epoch is 8. Epoch 7 is one short.
+        let err = release_escrow(&mut escrow, EpochId(7)).unwrap_err();
+        assert!(matches!(err, RewardError::EscrowReleaseTooEarly { .. }));
     }
 
     #[test]
@@ -202,7 +281,7 @@ mod tests {
             &default_config(),
         );
         slash_escrow(&mut escrow).unwrap();
-        assert!(release_escrow(&mut escrow).is_err());
+        assert!(release_escrow(&mut escrow, EpochId(8)).is_err());
     }
 
     #[test]
@@ -215,7 +294,7 @@ mod tests {
             EpochId(3),
             &default_config(),
         );
-        release_escrow(&mut escrow).unwrap();
+        release_escrow(&mut escrow, EpochId(8)).unwrap();
         assert!(slash_escrow(&mut escrow).is_err());
     }
 
@@ -229,7 +308,7 @@ mod tests {
             EpochId(3),
             &default_config(),
         );
-        release_escrow(&mut escrow).unwrap();
-        assert!(release_escrow(&mut escrow).is_err());
+        release_escrow(&mut escrow, EpochId(8)).unwrap();
+        assert!(release_escrow(&mut escrow, EpochId(8)).is_err());
     }
 }

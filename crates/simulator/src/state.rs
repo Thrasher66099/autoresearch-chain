@@ -19,9 +19,10 @@ use std::collections::HashMap;
 
 use arc_protocol_types::{
     Block, BlockId, BlockStatus, ChallengeId, ChallengeRecord, ChallengeTarget,
-    ChallengeType, DomainId, EpochId, EscrowId, EscrowRecord, ForkFamilyId,
-    GenesisBlock, GenesisBlockId, MetricDirection, MetricValue, ParticipantId,
-    TokenAmount, ValidatedBlockOutcome, ValidationAttestation, ArtifactHash,
+    ChallengeType, DomainId, EpochId, EscrowId, EscrowRecord, EscrowStatus,
+    ForkFamilyId, GenesisBlock, GenesisBlockId, MetricDirection, MetricValue,
+    ParticipantId, TokenAmount, ValidatedBlockOutcome, ValidationAttestation,
+    ArtifactHash,
 };
 
 use arc_domain_engine::config::GenesisActivationConfig;
@@ -350,8 +351,10 @@ impl SimulatorState {
     /// Handle a block being accepted: create validated outcome, escrow,
     /// open challenge window, update fork state and frontier.
     ///
-    /// Phase 0.3: uses validated metric value (mean observed delta from
+    /// Phase 0.3b: uses validated metric delta (mean observed delta from
     /// attestations) rather than the proposer's claimed_metric_delta.
+    /// Returns an error if no validator-observed delta is available —
+    /// protocol truth is never constructed from proposer claims.
     fn on_block_accepted(
         &mut self,
         block_id: &BlockId,
@@ -360,15 +363,28 @@ impl SimulatorState {
         let block = self.blocks.get(block_id).cloned()
             .ok_or_else(|| format!("block {} not found", block_id))?;
 
-        // Compute the validated metric value from attestation observations.
-        let validated_metric = MetricValue::new(
-            summary.mean_observed_delta.unwrap_or(block.claimed_metric_delta.as_f64()),
-        );
+        // Compute the validated metric delta from attestation observations.
+        // Protocol truth must come from validator-observed data, never from
+        // the proposer's claim.
+        //
+        // Since Phase 0.3c, acceptance requires truth-bearing Pass
+        // attestations (Pass with observed_delta), so mean_observed_delta
+        // is structurally guaranteed to exist here. The assertion guards
+        // against implementation bugs that bypass the protocol-rules layer.
+        let mean_delta = summary.mean_observed_delta.unwrap_or_else(|| {
+            panic!(
+                "protocol invariant violation: block {} reached on_block_accepted \
+                 but no validator-observed delta available; acceptance requires \
+                 truth-bearing Pass attestations (Phase 0.3c)",
+                block.id
+            )
+        });
+        let validated_metric = MetricValue::new(mean_delta);
 
         // Store the validated outcome (protocol truth).
         self.validated_outcomes.insert(block.id, ValidatedBlockOutcome {
             block_id: block.id,
-            validated_metric_value: validated_metric,
+            validated_metric_delta: validated_metric,
             attestation_count: summary.total,
             validation_epoch: self.current_epoch,
         });
@@ -431,12 +447,18 @@ impl SimulatorState {
                 })
                 .map_err(|e| e.to_string())?;
 
-            // Update frontier using VALIDATED metric value (not claimed delta).
+            // Update frontier using VALIDATED metric delta (not claimed delta).
             let higher_is_better = self
                 .metric_directions
                 .get(&domain_id)
-                .map(|d| *d == MetricDirection::HigherBetter)
-                .unwrap_or(true);
+                .ok_or_else(|| {
+                    format!(
+                        "domain {} has no registered metric direction; \
+                         cannot evaluate frontier",
+                        domain_id
+                    )
+                })
+                .map(|d| *d == MetricDirection::HigherBetter)?;
 
             fork_state.maybe_update_frontier(
                 block.id,
@@ -461,17 +483,39 @@ impl SimulatorState {
     }
 
     /// Settle a block and release its escrow.
+    ///
+    /// Escrow release respects the release_epoch: the current epoch must
+    /// be at or past the escrow's release_epoch (challenge survival boundary).
+    /// The escrow timing check is performed before the block status
+    /// transition to avoid inconsistent state on failure.
     pub fn settle_block(&mut self, block_id: &BlockId) -> Result<(), String> {
+        // Pre-check: verify escrow release timing before mutating block status.
+        // This prevents the block from transitioning to Settled while the
+        // escrow cannot be released yet.
+        if let Some(escrow_id) = self.block_escrows.get(block_id) {
+            if let Some(escrow) = self.escrow_records.get(escrow_id) {
+                if escrow.status == EscrowStatus::Held
+                    && self.current_epoch.0 < escrow.release_epoch.0
+                {
+                    return Err(format!(
+                        "cannot settle block {}: escrow {} not releasable until epoch {} \
+                         (current epoch {})",
+                        block_id, escrow_id, escrow.release_epoch.0, self.current_epoch.0
+                    ));
+                }
+            }
+        }
+
         let block = self
             .blocks
             .get_mut(block_id)
             .ok_or_else(|| format!("block {} not found", block_id))?;
         block_lifecycle::settle_block(block).map_err(|e| e.to_string())?;
 
-        // Release the corresponding escrow.
+        // Release the corresponding escrow (enforcing release_epoch).
         if let Some(escrow_id) = self.block_escrows.get(block_id) {
             if let Some(escrow) = self.escrow_records.get_mut(escrow_id) {
-                arc_reward_engine::release_escrow(escrow)
+                arc_reward_engine::release_escrow(escrow, self.current_epoch)
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -597,8 +641,14 @@ impl SimulatorState {
         let higher_is_better = self
             .metric_directions
             .get(&domain_id)
-            .map(|d| *d == MetricDirection::HigherBetter)
-            .unwrap_or(true);
+            .ok_or_else(|| {
+                format!(
+                    "domain {} has no registered metric direction; \
+                     cannot recompute frontier",
+                    domain_id
+                )
+            })
+            .map(|d| *d == MetricDirection::HigherBetter)?;
         let valid_candidates = self.valid_frontier_candidates(&domain_id);
 
         // Update fork state: remove from branch tips, clear dominance/frontier.
@@ -649,7 +699,7 @@ impl SimulatorState {
 
     /// Gather all valid frontier candidates for a domain.
     ///
-    /// Returns (block_id, validated_metric_value) pairs for blocks that:
+    /// Returns (block_id, validated_metric_delta) pairs for blocks that:
     /// - Belong to the specified domain
     /// - Have a validated outcome recorded
     /// - Are not themselves invalidated or rejected
@@ -673,7 +723,7 @@ impl SimulatorState {
                     })
                     .unwrap_or(false)
             })
-            .map(|(bid, outcome)| (*bid, outcome.validated_metric_value))
+            .map(|(bid, outcome)| (*bid, outcome.validated_metric_delta))
             .collect()
     }
 

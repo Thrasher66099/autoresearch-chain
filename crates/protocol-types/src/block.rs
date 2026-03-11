@@ -66,19 +66,25 @@ pub struct Block {
 /// The protocol-validated outcome of a block's claimed improvement.
 ///
 /// Created when a block passes validation and enters the challenge window.
-/// Contains the validator-observed metric value rather than the proposer's
-/// claimed value. This is what the protocol uses for frontier and dominance
-/// decisions.
+/// Contains the validator-observed metric delta (mean of observed deltas
+/// from passing validators) rather than the proposer's claimed delta.
+/// This is what the protocol uses for frontier and dominance decisions.
 ///
-/// Note: `PartialEq` without `Eq` because `validated_metric_value` uses
+/// This is a delta (improvement relative to the parent), not an absolute
+/// metric value. The protocol does not currently derive cross-validator
+/// absolute scores — only aggregated observed deltas.
+///
+/// Note: `PartialEq` without `Eq` because `validated_metric_delta` uses
 /// [`MetricValue`], which wraps `f64` internally.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ValidatedBlockOutcome {
     /// The block this outcome applies to.
     pub block_id: BlockId,
-    /// The validated metric value from attestation aggregation (mean of
-    /// observed deltas from passing validators).
-    pub validated_metric_value: MetricValue,
+    /// The validated metric delta from attestation aggregation (mean of
+    /// observed deltas from passing validators). This is a delta, not an
+    /// absolute value — it represents how much the block improved on its
+    /// parent, as measured by validators.
+    pub validated_metric_delta: MetricValue,
     /// Number of attestations used in validation.
     pub attestation_count: u32,
     /// Epoch at which validation was completed.

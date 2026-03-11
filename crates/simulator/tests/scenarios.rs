@@ -283,6 +283,11 @@ fn scenario_c_full_block_lifecycle() {
         Some(BlockStatus::ChallengeWindowClosed)
     );
 
+    // Advance past the challenge window (release_epoch = 0 + 5 = 5).
+    for _ in 0..5 {
+        sim.advance_epoch();
+    }
+
     sim.settle_block(&block_id).unwrap();
     assert_eq!(sim.block_status(&block_id), Some(BlockStatus::Settled));
 
@@ -662,6 +667,7 @@ fn scenario_j_attestation_summary() {
     let summary = sim.attestation_summary(&block_id).unwrap();
     assert_eq!(summary.total, 3);
     assert_eq!(summary.pass_count, 2);
+    assert_eq!(summary.truth_bearing_pass_count, 2);
     assert_eq!(summary.inconclusive_count, 1);
     assert!(summary.mean_observed_delta.is_some());
     let mean = summary.mean_observed_delta.unwrap();
@@ -885,10 +891,10 @@ fn scenario_n_frontier_uses_validated_not_claimed() {
 
     // Validate the stored outcomes match the observed values.
     let outcome_a = sim.validated_outcome(&block_a_id).unwrap();
-    assert!((outcome_a.validated_metric_value.as_f64() - 0.01).abs() < 1e-10);
+    assert!((outcome_a.validated_metric_delta.as_f64() - 0.01).abs() < 1e-10);
 
     let outcome_b = sim.validated_outcome(&block_b_id).unwrap();
-    assert!((outcome_b.validated_metric_value.as_f64() - 0.03).abs() < 1e-10);
+    assert!((outcome_b.validated_metric_delta.as_f64() - 0.03).abs() < 1e-10);
 }
 
 // =======================================================================
@@ -976,8 +982,11 @@ fn scenario_p_settlement_releases_escrow() {
     // Escrow is Held.
     assert_eq!(sim.block_escrow(&block_id).unwrap().status, EscrowStatus::Held);
 
-    // Settle the block.
+    // Settle the block (advance past release_epoch first).
     sim.close_challenge_window(&block_id).unwrap();
+    for _ in 0..5 {
+        sim.advance_epoch();
+    }
     sim.settle_block(&block_id).unwrap();
 
     // Escrow is Released.
@@ -997,7 +1006,7 @@ fn scenario_p_validated_outcome_records_attestation_truth() {
     assert_eq!(outcome.block_id, block_id);
     assert_eq!(outcome.attestation_count, 3); // 3 validators
     // All validators reported 0.015 in submit_and_validate.
-    assert!((outcome.validated_metric_value.as_f64() - 0.015).abs() < 1e-10);
+    assert!((outcome.validated_metric_delta.as_f64() - 0.015).abs() < 1e-10);
 }
 
 // =======================================================================
@@ -1121,4 +1130,255 @@ fn scenario_q_cannot_submit_child_against_invalidated_parent() {
 
     // Should fail because parent is not in accepted state.
     assert!(result.is_err());
+}
+
+// =======================================================================
+// Phase 0.3b Scenario Tests
+// =======================================================================
+
+// =======================================================================
+// Scenario R: Acceptance requires validator-observed deltas
+// =======================================================================
+
+/// Phase 0.3c: Pass attestations without `observed_delta` do not count
+/// toward acceptance quorum. A block with nominal Pass votes but no
+/// truth-bearing Passes must not be Accepted.
+#[test]
+fn scenario_r_pass_without_observed_delta_does_not_count_toward_acceptance() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+
+    sim.submit_block(block).unwrap();
+    let assigned = sim.assign_validators(&block_id).unwrap();
+
+    // All validators Pass but WITHOUT observed_delta.
+    for v in &assigned {
+        sim.record_attestation(ValidationAttestation {
+            block_id,
+            validator: *v,
+            vote: ValidatorVote::Pass,
+            observed_delta: None,
+            replay_evidence_ref: test_artifact_hash(70),
+            timestamp: 1700002000,
+        })
+        .unwrap();
+    }
+
+    // Evaluation succeeds (no error), but the outcome is not Accepted
+    // because truth-bearing pass count is 0, below quorum.
+    let outcome = sim.evaluate_block(&block_id).unwrap();
+    assert_ne!(outcome, ProvisionalOutcome::Accepted,
+        "Pass without observed_delta must not count toward acceptance");
+
+    // Block should be Rejected (inconclusive_is_rejection = true by default).
+    assert_eq!(sim.block_status(&block_id), Some(BlockStatus::Rejected));
+
+    // No validated outcome should exist.
+    assert!(sim.validated_outcome(&block_id).is_none());
+
+    // No escrow should exist.
+    assert!(sim.block_escrow(&block_id).is_none());
+}
+
+/// Phase 0.3c: When some Pass attestations have observed_delta and some
+/// don't, only the truth-bearing ones count toward quorum.
+#[test]
+fn scenario_r_mixed_pass_with_and_without_delta() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+
+    sim.submit_block(block).unwrap();
+    let assigned = sim.assign_validators(&block_id).unwrap();
+
+    // 1 truth-bearing Pass, 2 Pass-without-delta.
+    // Default quorum = 2, so this should NOT be accepted.
+    sim.record_attestation(ValidationAttestation {
+        block_id,
+        validator: assigned[0],
+        vote: ValidatorVote::Pass,
+        observed_delta: Some(MetricValue::new(0.015)),
+        replay_evidence_ref: test_artifact_hash(70),
+        timestamp: 1700002000,
+    }).unwrap();
+    sim.record_attestation(ValidationAttestation {
+        block_id,
+        validator: assigned[1],
+        vote: ValidatorVote::Pass,
+        observed_delta: None,
+        replay_evidence_ref: test_artifact_hash(71),
+        timestamp: 1700002001,
+    }).unwrap();
+    sim.record_attestation(ValidationAttestation {
+        block_id,
+        validator: assigned[2],
+        vote: ValidatorVote::Pass,
+        observed_delta: None,
+        replay_evidence_ref: test_artifact_hash(72),
+        timestamp: 1700002002,
+    }).unwrap();
+
+    let outcome = sim.evaluate_block(&block_id).unwrap();
+    assert_ne!(outcome, ProvisionalOutcome::Accepted,
+        "only 1 truth-bearing Pass, below quorum of 2");
+}
+
+/// Phase 0.3c: When enough truth-bearing Passes exist (even with some
+/// non-truth-bearing ones), block is accepted and mean delta uses only
+/// truth-bearing attestations.
+#[test]
+fn scenario_r_enough_truth_bearing_passes_accepted() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+
+    sim.submit_block(block).unwrap();
+    let assigned = sim.assign_validators(&block_id).unwrap();
+
+    // 2 truth-bearing Passes (quorum = 2), 1 Pass without delta.
+    sim.record_attestation(ValidationAttestation {
+        block_id,
+        validator: assigned[0],
+        vote: ValidatorVote::Pass,
+        observed_delta: Some(MetricValue::new(0.010)),
+        replay_evidence_ref: test_artifact_hash(70),
+        timestamp: 1700002000,
+    }).unwrap();
+    sim.record_attestation(ValidationAttestation {
+        block_id,
+        validator: assigned[1],
+        vote: ValidatorVote::Pass,
+        observed_delta: Some(MetricValue::new(0.020)),
+        replay_evidence_ref: test_artifact_hash(71),
+        timestamp: 1700002001,
+    }).unwrap();
+    sim.record_attestation(ValidationAttestation {
+        block_id,
+        validator: assigned[2],
+        vote: ValidatorVote::Pass,
+        observed_delta: None,
+        replay_evidence_ref: test_artifact_hash(72),
+        timestamp: 1700002002,
+    }).unwrap();
+
+    let outcome = sim.evaluate_block(&block_id).unwrap();
+    assert_eq!(outcome, ProvisionalOutcome::Accepted);
+
+    // Validated outcome should exist with mean of 0.010 and 0.020 only
+    // (the Pass without delta is excluded from the mean).
+    let validated = sim.validated_outcome(&block_id).unwrap();
+    assert!((validated.validated_metric_delta.as_f64() - 0.015).abs() < 1e-10,
+        "mean delta must use only truth-bearing Pass attestations");
+}
+
+/// Phase 0.3c: Every Accepted block must have a constructible
+/// validated_metric_delta. This is a simulator-level invariant check.
+#[test]
+fn scenario_r_accepted_implies_validated_delta_exists() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Accept several blocks and verify each has a validated outcome.
+    for i in 10..=12 {
+        let block = make_block(i, genesis_id.as_block_id(), domain_id, 0.01 * i as f64);
+        let block_id = block.id;
+        let outcome = submit_and_validate(&mut sim, block);
+        assert_eq!(outcome, ProvisionalOutcome::Accepted);
+
+        let validated = sim.validated_outcome(&block_id);
+        assert!(validated.is_some(),
+            "accepted block {} must have validated outcome", block_id);
+
+        let delta = validated.unwrap().validated_metric_delta.as_f64();
+        assert!(delta.is_finite(),
+            "validated delta for block {} must be finite", block_id);
+    }
+}
+
+#[test]
+fn scenario_r_validated_outcome_uses_observed_delta_not_claim() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let parent = genesis_id.as_block_id();
+
+    // Block claims delta 0.10 but validators observe 0.02.
+    let block = make_block(10, parent, domain_id, 0.10);
+    let block_id = block.id;
+    submit_and_validate_with_delta(&mut sim, block, 0.02);
+
+    let outcome = sim.validated_outcome(&block_id).unwrap();
+    // Protocol truth should be the observed 0.02, not the claimed 0.10.
+    assert!(
+        (outcome.validated_metric_delta.as_f64() - 0.02).abs() < 1e-10,
+        "protocol truth must use observed delta, not claimed delta"
+    );
+}
+
+// =======================================================================
+// Scenario S: Escrow release timing enforcement
+// =======================================================================
+
+#[test]
+fn scenario_s_early_settlement_rejected() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    sim.close_challenge_window(&block_id).unwrap();
+
+    // Do NOT advance epoch — current_epoch is still 0,
+    // but release_epoch is 5. Settlement should fail.
+    let result = sim.settle_block(&block_id);
+    assert!(result.is_err(), "settlement before release_epoch must fail");
+
+    // Block lifecycle advanced to ChallengeWindowClosed but escrow
+    // should still be Held.
+    let escrow = sim.block_escrow(&block_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Held);
+}
+
+#[test]
+fn scenario_s_settlement_at_release_epoch_succeeds() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    sim.close_challenge_window(&block_id).unwrap();
+
+    // Advance to exactly the release epoch (0 + 5 = 5).
+    for _ in 0..5 {
+        sim.advance_epoch();
+    }
+
+    sim.settle_block(&block_id).unwrap();
+
+    let escrow = sim.block_escrow(&block_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Released);
+}
+
+#[test]
+fn scenario_s_settlement_after_release_epoch_succeeds() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    sim.close_challenge_window(&block_id).unwrap();
+
+    // Advance well past release_epoch.
+    for _ in 0..10 {
+        sim.advance_epoch();
+    }
+
+    sim.settle_block(&block_id).unwrap();
+
+    let escrow = sim.block_escrow(&block_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Released);
 }
