@@ -26,6 +26,8 @@
 //! Full challenge economics, escalation, and remedy application are
 //! deferred to a later phase.
 
+use serde::{Serialize, Deserialize};
+
 use arc_protocol_types::{
     ArtifactHash, BlockId, BlockStatus, ChallengeId, ChallengeRecord,
     ChallengeStatus, ChallengeTarget, ChallengeType, EpochId,
@@ -36,7 +38,7 @@ use arc_protocol_types::{
 ///
 /// Separated from logic so thresholds can be tuned without touching
 /// state machine code.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChallengeConfig {
     /// Minimum bond required to open a challenge.
     pub min_challenge_bond: u64,

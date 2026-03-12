@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Serialize, Deserialize};
+
 use arc_protocol_types::{
     DomainId, DomainSpec, GenesisBlockId, ProblemDomain, TrackTree,
 };
@@ -16,7 +18,7 @@ use crate::genesis::ActivatedDomain;
 /// This is the in-memory state store for Phase 0.2. It holds domains,
 /// specs, and track trees. A future phase will replace this with
 /// persistent storage.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DomainRegistry {
     pub domains: HashMap<DomainId, ProblemDomain>,
     pub specs: HashMap<DomainId, DomainSpec>,

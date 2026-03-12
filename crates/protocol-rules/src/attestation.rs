@@ -2,11 +2,13 @@
 
 //! Attestation aggregation and provisional acceptance logic.
 
+use serde::{Serialize, Deserialize};
+
 use arc_protocol_types::{MetricValue, ValidationAttestation, ValidatorVote};
 use crate::config::ValidationConfig;
 
 /// Aggregated summary of attestations for a single block.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AttestationSummary {
     pub total: u32,
     /// Total Pass attestations (with or without observed_delta).
@@ -27,7 +29,7 @@ pub struct AttestationSummary {
 }
 
 /// The provisional outcome after evaluating attestations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProvisionalOutcome {
     /// Block accepted: sufficient Pass votes, no fraud.
     Accepted,

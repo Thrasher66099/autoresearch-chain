@@ -28,12 +28,17 @@ use serde::{Deserialize, Serialize};
 /// Defines a newtype identifier wrapping `[u8; 32]`.
 ///
 /// Each generated type gets: `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`,
-/// `Serialize`, `Deserialize`, a `ZERO` constant, `from_bytes`, `as_bytes`,
-/// and `Debug`/`Display` implementations showing a hex prefix.
+/// custom hex-based `Serialize`/`Deserialize`, a `ZERO` constant,
+/// `from_bytes`, `as_bytes`, and `Debug`/`Display` implementations
+/// showing a hex prefix.
+///
+/// Serialization uses lowercase hex strings (64 chars for 32 bytes).
+/// This allows these types to work as JSON map keys and produces
+/// human-readable output.
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name(pub [u8; 32]);
 
         impl $name {
@@ -48,6 +53,33 @@ macro_rules! define_id {
             /// View the underlying bytes.
             pub fn as_bytes(&self) -> &[u8; 32] {
                 &self.0
+            }
+
+            /// Encode as a lowercase hex string.
+            fn to_hex(&self) -> String {
+                let mut s = String::with_capacity(64);
+                for byte in &self.0 {
+                    use std::fmt::Write;
+                    write!(s, "{:02x}", byte).unwrap();
+                }
+                s
+            }
+
+            /// Decode from a hex string.
+            fn from_hex(s: &str) -> Result<Self, String> {
+                if s.len() != 64 {
+                    return Err(format!(
+                        "expected 64 hex chars for {}, got {}",
+                        stringify!($name),
+                        s.len()
+                    ));
+                }
+                let mut bytes = [0u8; 32];
+                for i in 0..32 {
+                    bytes[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
+                        .map_err(|e| format!("invalid hex in {}: {}", stringify!($name), e))?;
+                }
+                Ok(Self(bytes))
             }
         }
 
@@ -67,6 +99,19 @@ macro_rules! define_id {
                     write!(f, "{:02x}", byte)?;
                 }
                 write!(f, "\u{2026}")
+            }
+        }
+
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(&self.to_hex())
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+                Self::from_hex(&s).map_err(serde::de::Error::custom)
             }
         }
     };

@@ -26,6 +26,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Serialize, Deserialize};
+
 use arc_protocol_types::{
     Block, BlockId, BlockStatus, ChallengeId, ChallengeRecord, ChallengeTarget,
     ChallengeType, DerivedValidity, DomainId, EpochId, EscrowId, EscrowRecord,
@@ -51,7 +53,7 @@ use arc_reward_engine::RewardConfig;
 ///
 /// Holds all protocol objects in memory. This is not persistent storage —
 /// it exists for local deterministic testing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimulatorState {
     /// Current epoch.
     pub current_epoch: EpochId,
