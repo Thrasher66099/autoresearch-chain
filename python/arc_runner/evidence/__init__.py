@@ -19,12 +19,12 @@
 Evidence bundle creation and validation.
 
 Provides content-addressed artifact storage and evidence bundle assembly
-using SHA-256 hashing (matching the Rust storage-model crate).
+using BLAKE3 hashing (matching the Rust storage-model crate).
 """
 
 from __future__ import annotations
 
-import hashlib
+import blake3
 import os
 import shutil
 import subprocess
@@ -33,9 +33,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-def sha256_file(path: str | Path) -> str:
-    """Compute the SHA-256 hex digest of a file's contents."""
-    h = hashlib.sha256()
+def blake3_file(path: str | Path) -> str:
+    """Compute the BLAKE3 hex digest of a file's contents."""
+    h = blake3.blake3()
     with open(path, "rb") as f:
         while True:
             chunk = f.read(65536)
@@ -45,9 +45,9 @@ def sha256_file(path: str | Path) -> str:
     return h.hexdigest()
 
 
-def sha256_bytes(data: bytes) -> str:
-    """Compute the SHA-256 hex digest of raw bytes."""
-    return hashlib.sha256(data).hexdigest()
+def blake3_bytes(data: bytes) -> str:
+    """Compute the BLAKE3 hex digest of raw bytes."""
+    return blake3.blake3(data).hexdigest()
 
 
 @dataclass
@@ -89,7 +89,7 @@ class EvidenceBundler:
     """Creates evidence bundles by hashing and storing artifacts.
 
     Stores files in a content-addressed directory: ``store_dir/<hex-hash>``.
-    Uses SHA-256 to match the Rust ``arc-storage-model`` crate.
+    Uses BLAKE3 to match the Rust ``arc-storage-model`` crate.
     """
 
     def __init__(self, store_dir: str | Path) -> None:
@@ -98,7 +98,7 @@ class EvidenceBundler:
 
     def hash_file(self, path: str | Path) -> str:
         """Hash a file and store it. Returns the hex digest."""
-        hex_hash = sha256_file(path)
+        hex_hash = blake3_file(path)
         dest = self.store_dir / hex_hash
         if not dest.exists():
             shutil.copy2(path, dest)
@@ -106,7 +106,7 @@ class EvidenceBundler:
 
     def hash_bytes(self, data: bytes) -> str:
         """Hash raw bytes and store them. Returns the hex digest."""
-        hex_hash = sha256_bytes(data)
+        hex_hash = blake3_bytes(data)
         dest = self.store_dir / hex_hash
         if not dest.exists():
             dest.write_bytes(data)

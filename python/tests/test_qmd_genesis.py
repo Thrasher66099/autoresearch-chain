@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from arc_runner.evidence import EvidenceBundle, EvidenceBundler, sha256_bytes, sha256_file
+from arc_runner.evidence import EvidenceBundle, EvidenceBundler, blake3_bytes, blake3_file
 from arc_runner.domains.qmd_query_expansion import QMDGenesisPackager
 from arc_runner.autoresearch_adapter import AutoresearchAdapter
 
@@ -185,11 +185,11 @@ class TestEvidenceBundler:
         assert bundler.fetch("a" * 64) is None
 
     def test_python_rust_hash_agreement(self, store_dir: Path):
-        """SHA-256 of known content should match across Python and Rust."""
+        """BLAKE3 of known content should match across Python and Rust."""
         bundler = EvidenceBundler(store_dir)
-        # SHA-256 of b"hello, world!" is well-known.
+        # BLAKE3 of b"hello, world!" — must match Rust content_hash().
         hex_hash = bundler.hash_bytes(b"hello, world!")
-        expected = "68e656b251e67e8358bef8483ab0d51c6619f3e7a1a9f0e75838d41ff368f728"
+        expected = "5b92a0a84fbc50a58c74f4717bc0d5f403282ae4cd7d7a384311ed3c418a15d8"
         assert hex_hash == expected
 
     def test_bundle_creates_complete_evidence(self, tmp_path: Path, store_dir: Path):
@@ -305,9 +305,9 @@ class TestQMDGenesisPackager:
         frozen_hashes = genesis["_frozen_surface_hashes"]
 
         # Verify frozen surface hashes match direct file hashing.
-        assert frozen_hashes["reward.py"] == sha256_file(finetune_dir / "reward.py")
-        assert frozen_hashes["eval.py"] == sha256_file(finetune_dir / "eval.py")
-        assert frozen_hashes["evals/queries.txt"] == sha256_file(
+        assert frozen_hashes["reward.py"] == blake3_file(finetune_dir / "reward.py")
+        assert frozen_hashes["eval.py"] == blake3_file(finetune_dir / "eval.py")
+        assert frozen_hashes["evals/queries.txt"] == blake3_file(
             finetune_dir / "evals" / "queries.txt"
         )
 

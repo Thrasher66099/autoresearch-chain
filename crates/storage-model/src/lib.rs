@@ -17,53 +17,33 @@
 
 //! Content-addressed artifact storage for AutoResearch Chain.
 //!
-//! The protocol references artifacts by their SHA-256 content hash. This crate
+//! The protocol references artifacts by their BLAKE3 content hash. This crate
 //! provides the storage layer that maps between raw bytes and [`ArtifactHash`]
 //! identifiers.
 //!
 //! # Architecture
 //!
-//! - [`ContentStore`] trait defines the store/fetch interface.
+//! - [`ArtifactStore`] trait defines the store/fetch interface.
+//! - [`InMemoryArtifactStore`] implements an in-memory store for testing and simulation.
 //! - [`LocalContentStore`] implements file-backed storage in a local directory.
 //! - [`EvidenceBundle`] groups the artifact hashes for a complete evidence submission.
 //! - [`bundle_evidence`] is a convenience function to store multiple files at once.
 
+pub mod artifact;
+pub mod error;
+pub mod hash;
+pub mod store;
+
+pub use artifact::{ArtifactKind, ArtifactMetadata};
+pub use error::StoreError;
+pub use hash::{content_hash, verify_content};
+pub use store::{ArtifactStore, InMemoryArtifactStore};
+
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 use arc_protocol_types::ArtifactHash;
-
-/// Errors from storage operations.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StorageError {
-    /// Failed to read or write a file.
-    Io(String),
-    /// Requested artifact not found in the store.
-    NotFound(ArtifactHash),
-}
-
-impl std::fmt::Display for StorageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(msg) => write!(f, "storage I/O error: {}", msg),
-            Self::NotFound(hash) => write!(f, "artifact not found: {}", hash),
-        }
-    }
-}
-
-impl std::error::Error for StorageError {}
-
-/// Compute the SHA-256 hash of raw bytes, returning an [`ArtifactHash`].
-pub fn sha256_hash(data: &[u8]) -> ArtifactHash {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let result = hasher.finalize();
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&result);
-    ArtifactHash::from_bytes(bytes)
-}
 
 /// Convert an [`ArtifactHash`] to its hex-encoded string representation.
 pub fn hash_to_hex(hash: &ArtifactHash) -> String {
@@ -74,51 +54,50 @@ pub fn hash_to_hex(hash: &ArtifactHash) -> String {
 }
 
 /// Parse a hex-encoded string into an [`ArtifactHash`].
-pub fn hex_to_hash(hex: &str) -> Result<ArtifactHash, StorageError> {
+pub fn hex_to_hash(hex: &str) -> Result<ArtifactHash, StoreError> {
     if hex.len() != 64 {
-        return Err(StorageError::Io(format!(
-            "invalid hex hash length: expected 64, got {}",
-            hex.len()
-        )));
+        return Err(StoreError::Internal {
+            message: format!(
+                "invalid hex hash length: expected 64, got {}",
+                hex.len()
+            ),
+        });
     }
     let mut bytes = [0u8; 32];
     for i in 0..32 {
         bytes[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
-            .map_err(|e| StorageError::Io(format!("invalid hex: {}", e)))?;
+            .map_err(|e| StoreError::Internal {
+                message: format!("invalid hex: {}", e),
+            })?;
     }
     Ok(ArtifactHash::from_bytes(bytes))
 }
 
-/// Content-addressed artifact storage interface.
-pub trait ContentStore {
-    /// Store raw bytes and return their content-addressed hash.
-    fn store(&self, data: &[u8]) -> Result<ArtifactHash, StorageError>;
-
-    /// Fetch raw bytes by their content-addressed hash.
-    fn fetch(&self, hash: &ArtifactHash) -> Result<Vec<u8>, StorageError>;
-
-    /// Check whether an artifact exists in the store.
-    fn exists(&self, hash: &ArtifactHash) -> bool;
-}
-
 /// File-backed content-addressed storage.
 ///
-/// Stores artifacts as files named by their hex-encoded SHA-256 hash
+/// Stores artifacts as files named by their hex-encoded BLAKE3 hash
 /// in a flat directory structure: `<store_dir>/<hex-hash>`.
 pub struct LocalContentStore {
     /// Root directory for stored artifacts.
     store_dir: PathBuf,
+    /// Metadata for stored artifacts.
+    metadata: HashMap<ArtifactHash, ArtifactMetadata>,
 }
 
 impl LocalContentStore {
     /// Create a new store backed by the given directory.
     ///
     /// Creates the directory if it does not exist.
-    pub fn new(store_dir: impl AsRef<Path>) -> Result<Self, StorageError> {
+    pub fn new(store_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
         let store_dir = store_dir.as_ref().to_path_buf();
         fs::create_dir_all(&store_dir)
-            .map_err(|e| StorageError::Io(format!("failed to create store dir: {}", e)))?;
-        Ok(Self { store_dir })
+            .map_err(|e| StoreError::Internal {
+                message: format!("failed to create store dir: {}", e),
+            })?;
+        Ok(Self {
+            store_dir,
+            metadata: HashMap::new(),
+        })
     }
 
     /// Return the filesystem path for a given artifact hash.
@@ -127,32 +106,59 @@ impl LocalContentStore {
     }
 
     /// Store a file from disk by reading and hashing its contents.
-    pub fn store_file(&self, path: impl AsRef<Path>) -> Result<ArtifactHash, StorageError> {
+    pub fn store_file(&mut self, path: impl AsRef<Path>) -> Result<ArtifactHash, StoreError> {
         let data = fs::read(path.as_ref())
-            .map_err(|e| StorageError::Io(format!("failed to read {}: {}", path.as_ref().display(), e)))?;
-        self.store(&data)
+            .map_err(|e| StoreError::Internal {
+                message: format!("failed to read {}: {}", path.as_ref().display(), e),
+            })?;
+        self.store(&data, ArtifactKind::SourceTree, 0)
     }
 }
 
-impl ContentStore for LocalContentStore {
-    fn store(&self, data: &[u8]) -> Result<ArtifactHash, StorageError> {
-        let hash = sha256_hash(data);
+impl ArtifactStore for LocalContentStore {
+    fn store(
+        &mut self,
+        data: &[u8],
+        kind: ArtifactKind,
+        timestamp: u64,
+    ) -> Result<ArtifactHash, StoreError> {
+        let hash = content_hash(data);
         let path = self.artifact_path(&hash);
         // Content-addressed: if it already exists, contents are identical.
         if !path.exists() {
             fs::write(&path, data)
-                .map_err(|e| StorageError::Io(format!("failed to write artifact: {}", e)))?;
+                .map_err(|e| StoreError::Internal {
+                    message: format!("failed to write artifact: {}", e),
+                })?;
+            self.metadata.insert(hash, ArtifactMetadata {
+                hash,
+                kind,
+                size_bytes: data.len() as u64,
+                stored_at: timestamp,
+            });
         }
         Ok(hash)
     }
 
-    fn fetch(&self, hash: &ArtifactHash) -> Result<Vec<u8>, StorageError> {
+    fn fetch(&self, hash: &ArtifactHash) -> Result<Option<Vec<u8>>, StoreError> {
         let path = self.artifact_path(hash);
-        fs::read(&path).map_err(|_| StorageError::NotFound(*hash))
+        if path.exists() {
+            fs::read(&path)
+                .map(Some)
+                .map_err(|e| StoreError::Internal {
+                    message: format!("failed to read artifact: {}", e),
+                })
+        } else {
+            Ok(None)
+        }
     }
 
-    fn exists(&self, hash: &ArtifactHash) -> bool {
+    fn contains(&self, hash: &ArtifactHash) -> bool {
         self.artifact_path(hash).exists()
+    }
+
+    fn metadata(&self, hash: &ArtifactHash) -> Option<&ArtifactMetadata> {
+        self.metadata.get(hash)
     }
 }
 
@@ -181,25 +187,28 @@ pub struct EvidenceBundle {
 /// Reads each file, stores it in the content store, and collects the resulting
 /// hashes into an [`EvidenceBundle`].
 pub fn bundle_evidence(
-    store: &impl ContentStore,
+    store: &mut impl ArtifactStore,
     diff_path: impl AsRef<Path>,
     config_path: impl AsRef<Path>,
     env_manifest_path: impl AsRef<Path>,
     training_log_path: impl AsRef<Path>,
     metric_output_path: impl AsRef<Path>,
-) -> Result<EvidenceBundle, StorageError> {
-    let read_and_store = |path: &Path| -> Result<ArtifactHash, StorageError> {
+    timestamp: u64,
+) -> Result<EvidenceBundle, StoreError> {
+    let read_and_store = |store: &mut dyn ArtifactStore, path: &Path, kind: ArtifactKind| -> Result<ArtifactHash, StoreError> {
         let data = fs::read(path)
-            .map_err(|e| StorageError::Io(format!("failed to read {}: {}", path.display(), e)))?;
-        store.store(&data)
+            .map_err(|e| StoreError::Internal {
+                message: format!("failed to read {}: {}", path.display(), e),
+            })?;
+        store.store(&data, kind, timestamp)
     };
 
     Ok(EvidenceBundle {
-        diff_hash: read_and_store(diff_path.as_ref())?,
-        config_hash: read_and_store(config_path.as_ref())?,
-        env_manifest_hash: read_and_store(env_manifest_path.as_ref())?,
-        training_log_hash: read_and_store(training_log_path.as_ref())?,
-        metric_output_hash: read_and_store(metric_output_path.as_ref())?,
+        diff_hash: read_and_store(store, diff_path.as_ref(), ArtifactKind::Diff)?,
+        config_hash: read_and_store(store, config_path.as_ref(), ArtifactKind::Config)?,
+        env_manifest_hash: read_and_store(store, env_manifest_path.as_ref(), ArtifactKind::EnvironmentManifest)?,
+        training_log_hash: read_and_store(store, training_log_path.as_ref(), ArtifactKind::TrainingLog)?,
+        metric_output_hash: read_and_store(store, metric_output_path.as_ref(), ArtifactKind::MetricOutput)?,
     })
 }
 
@@ -216,63 +225,63 @@ mod tests {
 
     #[test]
     fn store_and_fetch_roundtrip() {
-        let (_tmp, store) = setup_store();
+        let (_tmp, mut store) = setup_store();
         let data = b"hello, world!";
-        let hash = store.store(data).unwrap();
+        let hash = store.store(data, ArtifactKind::Diff, 0).unwrap();
 
         // Hash should be non-zero.
         assert_ne!(hash, ArtifactHash::ZERO);
 
         // Fetch should return original data.
         let fetched = store.fetch(&hash).unwrap();
-        assert_eq!(fetched, data);
+        assert_eq!(fetched, Some(data.to_vec()));
     }
 
     #[test]
     fn hash_is_deterministic() {
         let data = b"deterministic content";
-        let hash1 = sha256_hash(data);
-        let hash2 = sha256_hash(data);
+        let hash1 = content_hash(data);
+        let hash2 = content_hash(data);
         assert_eq!(hash1, hash2);
     }
 
     #[test]
     fn different_content_different_hash() {
-        let hash1 = sha256_hash(b"content A");
-        let hash2 = sha256_hash(b"content B");
+        let hash1 = content_hash(b"content A");
+        let hash2 = content_hash(b"content B");
         assert_ne!(hash1, hash2);
     }
 
     #[test]
     fn store_is_idempotent() {
-        let (_tmp, store) = setup_store();
+        let (_tmp, mut store) = setup_store();
         let data = b"same data twice";
-        let hash1 = store.store(data).unwrap();
-        let hash2 = store.store(data).unwrap();
+        let hash1 = store.store(data, ArtifactKind::Diff, 0).unwrap();
+        let hash2 = store.store(data, ArtifactKind::Diff, 0).unwrap();
         assert_eq!(hash1, hash2);
     }
 
     #[test]
-    fn fetch_missing_artifact_returns_not_found() {
+    fn fetch_missing_artifact_returns_none() {
         let (_tmp, store) = setup_store();
         let fake_hash = ArtifactHash::from_bytes([42u8; 32]);
-        let result = store.fetch(&fake_hash);
-        assert!(matches!(result, Err(StorageError::NotFound(_))));
+        let result = store.fetch(&fake_hash).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
-    fn exists_check() {
-        let (_tmp, store) = setup_store();
-        let hash = store.store(b"exists test").unwrap();
-        assert!(store.exists(&hash));
+    fn contains_check() {
+        let (_tmp, mut store) = setup_store();
+        let hash = store.store(b"exists test", ArtifactKind::Diff, 0).unwrap();
+        assert!(store.contains(&hash));
 
         let missing = ArtifactHash::from_bytes([99u8; 32]);
-        assert!(!store.exists(&missing));
+        assert!(!store.contains(&missing));
     }
 
     #[test]
     fn hex_roundtrip() {
-        let hash = sha256_hash(b"hex test");
+        let hash = content_hash(b"hex test");
         let hex = hash_to_hex(&hash);
         assert_eq!(hex.len(), 64);
         let parsed = hex_to_hash(&hex).unwrap();
@@ -282,7 +291,7 @@ mod tests {
     #[test]
     fn store_file_from_disk() {
         let tmp = TempDir::new().unwrap();
-        let store = LocalContentStore::new(tmp.path().join("artifacts")).unwrap();
+        let mut store = LocalContentStore::new(tmp.path().join("artifacts")).unwrap();
 
         // Write a test file.
         let file_path = tmp.path().join("test.txt");
@@ -293,17 +302,17 @@ mod tests {
 
         // Verify contents match.
         let fetched = store.fetch(&hash).unwrap();
-        assert_eq!(fetched, b"file content for hashing");
+        assert_eq!(fetched, Some(b"file content for hashing".to_vec()));
 
         // Hash should match direct computation.
-        let expected_hash = sha256_hash(b"file content for hashing");
+        let expected_hash = content_hash(b"file content for hashing");
         assert_eq!(hash, expected_hash);
     }
 
     #[test]
     fn bundle_evidence_stores_all_files() {
         let tmp = TempDir::new().unwrap();
-        let store = LocalContentStore::new(tmp.path().join("artifacts")).unwrap();
+        let mut store = LocalContentStore::new(tmp.path().join("artifacts")).unwrap();
 
         // Create test evidence files.
         let diff = tmp.path().join("diff.patch");
@@ -318,7 +327,7 @@ mod tests {
         fs::write(&log, b"epoch 1/5: loss=0.5\nepoch 2/5: loss=0.3").unwrap();
         fs::write(&metrics, b"{\"test_accuracy\": 0.945}").unwrap();
 
-        let bundle = bundle_evidence(&store, &diff, &config, &env, &log, &metrics).unwrap();
+        let bundle = bundle_evidence(&mut store, &diff, &config, &env, &log, &metrics, 0).unwrap();
 
         // All hashes should be non-zero and distinct.
         assert_ne!(bundle.diff_hash, ArtifactHash::ZERO);
@@ -328,24 +337,24 @@ mod tests {
         assert_ne!(bundle.metric_output_hash, ArtifactHash::ZERO);
 
         // All hashes should be retrievable.
-        assert!(store.exists(&bundle.diff_hash));
-        assert!(store.exists(&bundle.config_hash));
-        assert!(store.exists(&bundle.env_manifest_hash));
-        assert!(store.exists(&bundle.training_log_hash));
-        assert!(store.exists(&bundle.metric_output_hash));
+        assert!(store.contains(&bundle.diff_hash));
+        assert!(store.contains(&bundle.config_hash));
+        assert!(store.contains(&bundle.env_manifest_hash));
+        assert!(store.contains(&bundle.training_log_hash));
+        assert!(store.contains(&bundle.metric_output_hash));
     }
 
     #[test]
     fn bundle_evidence_fails_on_missing_file() {
         let tmp = TempDir::new().unwrap();
-        let store = LocalContentStore::new(tmp.path().join("artifacts")).unwrap();
+        let mut store = LocalContentStore::new(tmp.path().join("artifacts")).unwrap();
 
         let existing = tmp.path().join("exists.txt");
         fs::write(&existing, b"content").unwrap();
 
         let missing = tmp.path().join("does_not_exist.txt");
 
-        let result = bundle_evidence(&store, &missing, &existing, &existing, &existing, &existing);
+        let result = bundle_evidence(&mut store, &missing, &existing, &existing, &existing, &existing, 0);
         assert!(result.is_err());
     }
 }
