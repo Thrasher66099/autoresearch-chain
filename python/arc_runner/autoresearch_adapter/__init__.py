@@ -32,7 +32,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from arc_runner.evidence import EvidenceBundler, sha256_file
+from arc_runner.evidence import EvidenceBundler, blake3_file
 
 
 class AutoresearchAdapter:
@@ -102,7 +102,7 @@ class AutoresearchAdapter:
                         f"Frozen surface file missing: {relpath}"
                     )
 
-            actual_hash = sha256_file(file_path)
+            actual_hash = blake3_file(file_path)
             if actual_hash != expected_hash:
                 raise ValueError(
                     f"Frozen surface violation: {relpath} has been modified "

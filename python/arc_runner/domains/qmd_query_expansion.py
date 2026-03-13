@@ -30,7 +30,7 @@ import json
 import tarfile
 from pathlib import Path
 
-from arc_runner.evidence import EvidenceBundler, sha256_bytes, sha256_file
+from arc_runner.evidence import EvidenceBundler, blake3_bytes, blake3_file
 
 
 class QMDGenesisPackager:
