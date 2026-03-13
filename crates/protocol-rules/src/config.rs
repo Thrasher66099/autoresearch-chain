@@ -2,8 +2,10 @@
 
 //! Configuration for protocol rules thresholds.
 
+use serde::{Serialize, Deserialize};
+
 /// Configuration governing block validation and acceptance.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValidationConfig {
     /// Number of validators to assign per block.
     pub validators_per_block: usize,

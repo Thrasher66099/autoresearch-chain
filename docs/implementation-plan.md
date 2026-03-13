@@ -156,7 +156,7 @@ The question now is whether the protocol survives adversarial pressure and wheth
 
 ## Current Status
 
-Phase 0 is substantially complete. The Rust workspace contains 10 crates (~9,800 lines of code, 231 tests). The core protocol state machine runs deterministically in the simulator, composing all engines through integrated scenario tests.
+Phase 0 is substantially complete. The Rust workspace contains 10 crates (~10,600 lines of code, 268 tests). The core protocol state machine runs deterministically in the simulator, composing all engines through integrated scenario tests. Whole-state snapshot persistence is implemented, enabling save/load of the complete protocol state.
 
 ### Crate status
 
@@ -168,9 +168,9 @@ Phase 0 is substantially complete. The Rust workspace contains 10 crates (~9,800
 | `fork-engine` | Implemented | Fork families, metric-based dominance, frontier selection, invalidation handling |
 | `challenge-engine` | Partial | State machine implemented; economics, escalation, remedy application deferred |
 | `reward-engine` | Partial | Escrow create/release/slash implemented; staged rewards, attribution distribution deferred |
-| `simulator` | Implemented | Integrated state machine composing all engines; 51 scenario tests |
-| `storage-model` | Stub | Reference/hash model not yet defined |
-| `node` | Stub | Phase 1 target |
+| `simulator` | Implemented | Integrated state machine composing all engines; 51 scenario tests; whole-state snapshot persistence (serde JSON) |
+| `storage-model` | Partial | Content-addressed artifact store (BLAKE3), ArtifactStore trait, InMemoryArtifactStore; materialization triggers and frontier assembly not yet implemented |
+| `node` | Bootstrap | Phase 1 target; `init`/`inspect` commands and file-based state persistence implemented |
 | `cli` | Stub | Phase 1 target |
 
 ### Protocol-truth hardening
@@ -210,8 +210,8 @@ The protocol core should define at minimum:
 - `ChallengeRecord` — **done**
 - `AttributionClaim` — **done**
 - `CanonicalFrontierState` — **done**
-- `MaterializedState` — **done** (type defined; storage-model resolution not implemented)
-- `CodebaseStateRef` — **done** (type defined; storage-model resolution not implemented)
+- `MaterializedState` — **done** (type defined; artifact store available, frontier assembly not implemented)
+- `CodebaseStateRef` — **done** (type defined; artifact store available, reference resolution not implemented)
 - `EscrowRecord` — **done**
 - `MetricIntegrityPolicy` — **done**
 - `DatasetIntegrityPolicy` — **done**
@@ -257,13 +257,13 @@ A local simulator can model:
 
 without any real networking.
 
-This phase should be heavily test-driven. It has been: 231 tests cover the protocol core.
+This phase should be heavily test-driven. It has been: 268 tests cover the protocol core, storage model, and snapshot persistence.
 
 ### Phase 0 — Remaining Work
 
 1. Challenge economics and escalation (bond distribution, remedy application, escalation to governance)
 2. Staged reward release (multi-stage escrow, attribution-weighted distribution)
-3. Storage-model: content-addressed references, artifact metadata, materialization triggers
+3. Storage-model: materialization triggers, frontier state assembly, data availability checking (content-addressed artifact store and hash model now implemented)
 4. Successor-track creation and metric migration
 5. Cross-domain integration effects
 6. Reproducibility tolerance model (formalized thresholds beyond configurable parameters)
@@ -272,7 +272,7 @@ This phase should be heavily test-driven. It has been: 231 tests cover the proto
 
 ## Phase 1 — Local Single-Node Runtime
 
-**Status:** Not started. Stub binaries exist in workspace (`node`, `cli`). Phase 0 dependency is now substantially met.
+**Status:** Bootstrap started. Whole-state snapshot persistence implemented (JSON file save/load). Node binary has `init` and `inspect` commands. Full transaction submission flow, state queries, and CLI commands remain to be built.
 
 ### Goal
 
@@ -280,7 +280,7 @@ Wrap the protocol core in a minimal executable local runtime.
 
 ### Deliverables
 
-- single-node chain state persistence
+- single-node chain state persistence — **done** (whole-state JSON snapshot; incremental persistence deferred)
 - transaction-like submission flow for:
   - genesis proposals
   - blocks
@@ -340,7 +340,7 @@ This is the first point at which the protocol and useful-work layer truly connec
 
 ## Phase 3 — Artifact Layer and Frontier Materialization
 
-**Status:** Not started. The type-level foundation exists (`MaterializedState`, `CanonicalFrontierState`, `CodebaseStateRef`, `MaterializationPolicyKind`). The `storage-model` crate stub maps to these deliverables.
+**Status:** Partially started. The type-level foundation exists (`MaterializedState`, `CanonicalFrontierState`, `CodebaseStateRef`, `MaterializationPolicyKind`). The `storage-model` crate now implements content-addressed artifact storage (BLAKE3 hashing, `ArtifactStore` trait, `InMemoryArtifactStore`, `ArtifactKind` classification, `ArtifactMetadata`). Materialization triggers, frontier assembly, and data availability checking remain future work.
 
 ### Goal
 
@@ -467,7 +467,7 @@ Crate layout:
   - escrow create/release/slash, epoch-gated release timing (staged rewards and attribution deferred)
 
 - `crates/storage-model/`
-  - references, artifact metadata, materialized state references (stub — not yet implemented)
+  - content-addressed artifact store (BLAKE3 hashing), `ArtifactStore` trait, `InMemoryArtifactStore`, `ArtifactKind` classification, `ArtifactMetadata`, content verification
 
 - `crates/simulator/`
   - integrated protocol state machine composing all engines, scenario test harness
@@ -547,7 +547,7 @@ Domain independence works (domain registry, per-domain fork state, domain-scoped
 Users must be able to pull the current best assembled state.
 This is essential to the protocol's practical usability.
 
-The frontier types exist (`CanonicalFrontierState`, `MaterializedState`, `CodebaseStateRef`). The `storage-model` crate that would resolve references into pullable artifacts is a stub.
+The frontier types exist (`CanonicalFrontierState`, `MaterializedState`, `CodebaseStateRef`). The `storage-model` crate now implements content-addressed artifact storage, but reference resolution into pullable assembled states is not yet implemented.
 
 ### 5. Python Runner Integration — Not done
 
@@ -573,9 +573,9 @@ The protocol needs canonical formats for:
 
 Without canonical serialization, hashing and replay become fragile.
 
-Serde JSON serialization is implemented for all protocol types. A canonical binary format for hashing (deterministic byte-level representation) has not yet been chosen.
+Serde JSON serialization is implemented for all protocol types, including the complete simulator state (enabling whole-state snapshot persistence). Protocol identifier types serialize as hex strings, making JSON output human-readable and usable as map keys. A canonical binary format for hashing (deterministic byte-level representation) has not yet been chosen.
 
-### Reference and Hash Model — Partially locked
+### Reference and Hash Model — Locked
 
 The protocol needs a clean model for how it references:
 
@@ -588,7 +588,7 @@ The protocol needs a clean model for how it references:
 
 This should be explicit and stable early.
 
-`ArtifactHash` is defined as the type-level reference primitive. Resolution of references into retrievable artifacts is not yet implemented (storage-model stub).
+`ArtifactHash` is defined as the type-level reference primitive. Content-addressed hashing uses BLAKE3 (32-byte output mapping directly to `ArtifactHash`). The hash is determined solely by content bytes — artifact kind is metadata, not identity. The `ArtifactStore` trait defines storage/retrieval, and `InMemoryArtifactStore` provides the in-memory implementation. Resolution of references into pullable assembled states (frontier materialization) is not yet implemented.
 
 ### Reproducibility Tolerance Model — Partially locked
 
@@ -664,7 +664,7 @@ This is substantially achieved. The simulator implements domain activation, bloc
 What the implementation produced:
 
 - executable protocol logic that matches and refines the spec
-- adversarial testability (231 tests, including invalidation cascades and ancestry poisoning)
+- adversarial testability (268 tests, including invalidation cascades, ancestry poisoning, and snapshot persistence round-trips)
 - spec contradiction discovery (proposer-truth fallback, silent metric direction, non-truth-bearing attestation acceptance)
 - a foundation for all subsequent phases
 
@@ -681,7 +681,7 @@ This connects the protocol to actual useful work for the first time.
 These questions should stay active during implementation:
 
 - how strict should genesis activation thresholds be? — **partially resolved.** Configurable thresholds exist; real-world calibration requires testnet data.
-- how should artifact references be structured? — **type-level resolved** (`ArtifactHash`); resolution model not yet implemented.
+- how should artifact references be structured? — **resolved.** `ArtifactHash` is the reference primitive, content-addressed via BLAKE3. `ArtifactStore` trait defines storage/retrieval. `ArtifactKind` classifies artifact roles. Resolution into assembled pullable states (frontier materialization) remains open.
 - how often should frontier states be materialized? — **still open.** `MaterializationPolicyKind` enumerates trigger categories but policy evaluation is not implemented.
 - how should challenge escalation be encoded in v0? — **still open.** Basic challenge state machine works; escalation path and governance interaction are deferred.
 - how should domain-local reward accounting be represented internally? — **partially resolved.** Per-block escrow works; attribution-weighted distribution across contributors is deferred.
@@ -692,7 +692,7 @@ These questions should stay active during implementation:
 Questions that emerged during implementation:
 
 - How should deep-history invalidation interact with settlement finality? An upheld challenge invalidates a block and poisons its descendants, but if descendants have already settled, the cascade creates retroactive state changes.
-- What is the gap between structural validation (types are correct, lineage exists) and data availability checking (the referenced artifacts can actually be fetched)?
+- What is the gap between structural validation (types are correct, lineage exists) and data availability checking (the referenced artifacts can actually be fetched)? The `ArtifactStore` trait now provides the `contains()` operation needed for DA checks; the question is when and how the protocol enforces availability.
 - How should cross-domain effects work when domains share participants but have independent fork competition?
 - How do escrow economics behave under sustained fork competition, where multiple competing branches each hold escrows?
 

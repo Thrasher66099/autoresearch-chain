@@ -8,6 +8,8 @@
 //! Each transition is a pure function that takes current state + input
 //! and returns new state or error.
 
+use serde::{Serialize, Deserialize};
+
 use arc_protocol_types::{
     DomainSpecId, DomainType, ForkFamilyId, GenesisBlock,
     MaterializationPolicyKind, ProblemDomain, DomainSpec,
@@ -18,7 +20,7 @@ use crate::config::GenesisActivationConfig;
 use crate::error::DomainError;
 
 /// A seed validation record submitted by a validator during genesis activation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SeedValidationRecord {
     pub validator: arc_protocol_types::ValidatorId,
     pub vote: ValidatorVote,
@@ -29,7 +31,7 @@ pub struct SeedValidationRecord {
 /// The in-progress state for a genesis activation.
 ///
 /// Tracks the activation lifecycle and collects seed validation records.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GenesisActivation {
     pub track_init: TrackInitialization,
     pub genesis_block: GenesisBlock,
@@ -199,7 +201,7 @@ pub fn finalize_track_activation(
 }
 
 /// The bundle of objects created when a domain activates.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActivatedDomain {
     pub domain: ProblemDomain,
     pub domain_spec: DomainSpec,

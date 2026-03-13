@@ -30,6 +30,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Serialize, Deserialize};
+
 use arc_protocol_types::{
     Block, BlockId, BlockStatus, DomainId, ForkFamily, ForkFamilyId, MetricValue, TrackTreeId,
 };
@@ -73,7 +75,7 @@ impl std::fmt::Display for ForkError {
 /// Domain-local fork state tracker.
 ///
 /// Manages fork families and frontier candidates for a single domain.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DomainForkState {
     pub domain_id: DomainId,
     pub track_tree_id: TrackTreeId,

@@ -13,3 +13,7 @@ arc-fork-engine = { workspace = true }
 arc-challenge-engine = { workspace = true }
 arc-reward-engine = { workspace = true }
 arc-storage-model = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

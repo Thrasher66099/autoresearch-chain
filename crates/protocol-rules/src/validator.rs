@@ -6,6 +6,8 @@
 //! This uses a hash-based selection that is reproducible given the same
 //! inputs. No randomness beacon or networking required.
 
+use serde::{Serialize, Deserialize};
+
 use arc_protocol_types::{BlockId, DomainId, ValidatorId};
 use crate::error::ProtocolError;
 
@@ -13,7 +15,7 @@ use crate::error::ProtocolError;
 ///
 /// In Phase 0.2 this is a simple list. Later phases will add
 /// staking requirements, eligibility filtering, and rotation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValidatorPool {
     /// Domain this pool serves.
     pub domain_id: DomainId,

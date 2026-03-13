@@ -30,12 +30,14 @@
 //! to later phases. The interfaces here are designed to support those
 //! extensions without structural rewrites.
 
+use serde::{Serialize, Deserialize};
+
 use arc_protocol_types::{
     BlockId, EpochId, EscrowId, EscrowRecord, EscrowStatus, ParticipantId, TokenAmount,
 };
 
 /// Configuration for reward-engine policy.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RewardConfig {
     /// Number of epochs the challenge window lasts.
     /// Escrow release epoch = created_epoch + challenge_window_epochs.

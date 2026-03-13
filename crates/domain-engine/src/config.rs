@@ -5,8 +5,10 @@
 //! Separated from logic so thresholds can be tuned without touching
 //! state machine code.
 
+use serde::{Serialize, Deserialize};
+
 /// Configuration governing genesis activation thresholds.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GenesisActivationConfig {
     /// Minimum number of seed validation attestations required.
     pub min_seed_validations: u32,

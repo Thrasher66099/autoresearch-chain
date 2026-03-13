@@ -309,7 +309,7 @@ pub enum EscrowStatus {
 /// - `AncestryInvalid`: the block's own stored status is not `Invalidated`,
 ///   but at least one ancestor in its parent chain has `Invalidated` status.
 ///   The block is transitively invalid due to poisoned ancestry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DerivedValidity {
     /// Block is valid: not directly invalidated, no invalidated ancestors.
     DirectValid,
