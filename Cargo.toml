@@ -30,5 +30,6 @@ arc-reward-engine = { path = "crates/reward-engine" }
 arc-storage-model = { path = "crates/storage-model" }
 arc-simulator = { path = "crates/simulator" }
 
-# External dependencies will be added here as implementation proceeds.
-# Likely early additions: serde, thiserror, sha2/blake3.
+# External dependencies
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"

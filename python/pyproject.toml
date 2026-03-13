@@ -7,7 +7,7 @@ name = "arc-runner"
 version = "0.0.1"
 description = "Off-chain research execution runners for AutoResearch Chain."
 requires-python = ">=3.10"
-license = "AGPL-3.0-or-later"
+license = {text = "AGPL-3.0-or-later"}
 readme = "README.md"
 
 # No runtime dependencies yet. Expected early additions:
