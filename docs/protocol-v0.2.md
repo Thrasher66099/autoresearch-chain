@@ -4,7 +4,7 @@
 
 This document describes the technical structure of the AutoResearch Chain protocol as currently specified. It covers the system model, participant roles, block structure, evidence requirements, validation, fork mechanics, challenge system, and reward distribution.
 
-This is a design-stage specification. No reference implementation exists yet.
+This is a design-stage specification. A Rust reference implementation of the protocol state machine exists (see [Implementation Plan](implementation-plan.md)), but a networked runtime is not yet built.
 
 ---
 
@@ -360,7 +360,7 @@ The protocol introduces the following objects:
 
 These objects allow the chain to support multiple parallel research markets while preserving a canonical pullable codebase for each domain.
 
-**Status note:** Multi-domain support is specified at the protocol level. It is not yet implemented in any reference client. The object definitions and guarantees below are part of the protocol specification, not claims about existing software.
+**Status note:** Multi-domain support is specified at the protocol level and implemented in the Rust protocol core (domain registry, per-domain fork state, domain-scoped block lineage). Cross-domain integration effects are not yet implemented. A networked reference client does not yet exist.
 
 ---
 
@@ -745,7 +745,7 @@ The protocol introduces the following objects:
 
 These objects formalize how new research domains are created, activated, and rooted.
 
-**Status note:** Research track standards and genesis block mechanics are specified at the protocol level. They are not yet implemented in any reference client. The object definitions and guarantees below are part of the protocol specification, not claims about existing software.
+**Status note:** Research track standards and genesis block mechanics are specified at the protocol level and implemented in the Rust protocol core (genesis activation state machine, RTS-1 conformance checking, domain registry). The Python layer includes a QMD domain-specific genesis packager with content-addressed evidence bundling. Challenge economics, escalation, and successor-track creation are not yet implemented.
 
 ---
 
