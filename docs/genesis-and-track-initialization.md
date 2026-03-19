@@ -119,7 +119,7 @@ If the proposal meets the standard and survives validation, it becomes an active
 
 ## Implementation Maturity
 
-Research track standards and genesis block mechanics are specified at the protocol level. They are not yet implemented in any reference client. This document and the protocol specification describe the intended design, not currently running software.
+Research track standards and genesis block mechanics are specified at the protocol level and partially implemented. The Rust protocol core includes the genesis activation state machine (Proposed → ConformanceChecking → ValidationInProgress → ActivationPending → Active/Failed/Expired), RTS-1 conformance checking, and the domain registry. The Python layer includes a QMD domain-specific genesis packager with content-addressed evidence bundling. Challenge economics and successor-track creation are not yet implemented. A networked reference client does not yet exist.
 
 ---
 

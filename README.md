@@ -102,7 +102,7 @@ No code from `autoresearch` is currently included in this repository. See [THIRD
 | Gradient attestation system | Not yet specified |
 | Long-horizon compute accounting | Not yet specified |
 | Implementation direction chosen | Yes — Rust-native custom chain ([plan](docs/implementation-plan.md)) |
-| Reference implementation | Not yet started |
+| Reference implementation | Phase 0 complete; Phase 1 in progress ([plan](docs/implementation-plan.md)) |
 
 ## Documentation
 
@@ -131,8 +131,6 @@ The implementation follows a four-layer split. See [Implementation Plan](docs/im
 | Artifact / DA Layer | TBD | Content-addressed storage for diffs, evidence bundles, materialized snapshots |
 | Operator Interfaces | TBD | CLI, explorer, developer APIs (deferred until protocol core is validated) |
 
-No implementation code exists yet. The current repository contains protocol specification, design rationale, and project infrastructure.
-
 ## Repository Structure
 
 ```
@@ -158,8 +156,8 @@ docs/                              Protocol and project documentation
   licensing.md                     Licensing explanation
   terminology.md                   Glossary
 
-crates/                            (Planned) Rust protocol core — not yet implemented
-python/                            (Planned) Python research runners — not yet implemented
+crates/                            Rust protocol core (10 crates — protocol types, rules, engines, simulator, storage, node, CLI)
+python/                            Python research runners (evidence bundling, QMD genesis packaging, autoresearch adapter)
 spec/                              (Planned) Normative protocol documents
 fixtures/                          (Planned) Test domains, example genesis blocks
 simulations/                       (Planned) Adversarial and economic test scenarios
@@ -185,4 +183,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-*AutoResearch Chain is an early-stage protocol design. No reference implementation exists yet. The current repository contains the protocol specification, design rationale, and project infrastructure.*
+*AutoResearch Chain is an early-stage protocol. The Rust protocol core is implemented (Phase 0 complete) and the Python research-runner layer has initial support for evidence bundling and domain-specific genesis packaging. See the [Implementation Plan](docs/implementation-plan.md) for current status.*

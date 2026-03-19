@@ -109,9 +109,9 @@ Stage 3 is **not yet formally specified**. It is compatible with the protocol de
 - Full long-horizon compute contribution accounting
 - Token economics (beyond staged reward structure)
 - Governance implementation details
-- Reference implementation (architecture direction chosen — see [Implementation Plan](implementation-plan.md) — but no code exists yet)
-- Multi-domain reference client tooling (the protocol specifies multi-domain objects and guarantees; client-side tooling for domain discovery and state retrieval is not yet implemented)
-- Genesis block submission tooling (the protocol specifies genesis mechanics; no reference tooling for proposing or activating tracks exists yet)
+- Reference implementation beyond the current protocol core (the Rust protocol state machine is implemented and tested; networked node, full CLI, and production runtime are not yet built — see [Implementation Plan](implementation-plan.md))
+- Multi-domain reference client tooling (the protocol specifies multi-domain objects and guarantees, and the Rust core implements domain-independent state management; client-side tooling for domain discovery and state retrieval is not yet implemented)
+- Genesis block submission tooling beyond the current QMD prototype (the Rust core implements the genesis activation state machine and RTS-1 conformance checking; the Python layer includes a QMD domain-specific genesis packager; general-purpose genesis submission tooling is not yet built)
 
 ---
 
@@ -120,7 +120,7 @@ Stage 3 is **not yet formally specified**. It is compatible with the protocol de
 - It does not claim to already solve decentralized frontier model training.
 - It does not claim that Stage 3 is fully designed.
 - It does not claim that the research-discovery layer alone is sufficient for training production models.
-- It does not claim to have a reference implementation.
+- It does not claim to have a production-ready reference implementation. The protocol core is implemented as a local simulator and tested, but a networked runtime does not yet exist.
 
 The current scope is research discovery and validation. That scope is meaningful on its own and is the foundation for future layers.
 
