@@ -109,7 +109,7 @@ Stage 3 is **not yet formally specified**. It is compatible with the protocol de
 - Full long-horizon compute contribution accounting
 - Token economics (beyond staged reward structure)
 - Governance implementation details
-- Reference implementation beyond the current protocol core (the Rust protocol state machine is implemented and tested; networked node, full CLI, and production runtime are not yet built — see [Implementation Plan](implementation-plan.md))
+- Reference implementation beyond the current protocol core (the Rust protocol state machine is implemented and tested; the local node has CLI transaction submission and state queries; networked node and production runtime are not yet built — see [Implementation Plan](implementation-plan.md))
 - Multi-domain reference client tooling (the protocol specifies multi-domain objects and guarantees, and the Rust core implements domain-independent state management; client-side tooling for domain discovery and state retrieval is not yet implemented)
 - Genesis block submission tooling beyond the current QMD prototype (the Rust core implements the genesis activation state machine and RTS-1 conformance checking; the Python layer includes a QMD domain-specific genesis packager; general-purpose genesis submission tooling is not yet built)
 
