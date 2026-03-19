@@ -32,4 +32,4 @@ arc-simulator = { path = "crates/simulator" }
 
 # External dependencies
 serde = { version = "1", features = ["derive"] }
-sha2 = "0.10"
+blake3 = "1"

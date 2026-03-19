@@ -9,11 +9,9 @@ description = "Off-chain research execution runners for AutoResearch Chain."
 requires-python = ">=3.10"
 license = {text = "AGPL-3.0-or-later"}
 readme = "README.md"
-
-# No runtime dependencies yet. Expected early additions:
-# - httpx or requests (protocol client communication)
-# - pydantic (evidence bundle schemas)
-# - click or typer (runner CLI)
+dependencies = [
+    "blake3>=1.0",
+]
 
 [project.optional-dependencies]
 dev = [

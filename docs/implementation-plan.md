@@ -91,7 +91,7 @@ This layer is off-chain but protocol-coupled.
 
 It should integrate naturally with autoresearch-style loops.
 
-**Status:** No Python code exists yet. This is a Phase 2 target.
+**Status:** Initial implementation exists. The `arc-runner` Python package provides content-addressed evidence bundling (BLAKE3, matching the Rust storage-model), a QMD domain-specific genesis packager, and an autoresearch adapter with frozen/search surface enforcement. Proposer, validator, and challenger runners are structurally scaffolded. Full runner integration with the Rust protocol core (Phase 2) is not yet complete.
 
 ---
 
@@ -169,7 +169,7 @@ Phase 0 is substantially complete. The Rust workspace contains 10 crates (~10,60
 | `challenge-engine` | Partial | State machine implemented; economics, escalation, remedy application deferred |
 | `reward-engine` | Partial | Escrow create/release/slash implemented; staged rewards, attribution distribution deferred |
 | `simulator` | Implemented | Integrated state machine composing all engines; 51 scenario tests; whole-state snapshot persistence (serde JSON) |
-| `storage-model` | Partial | Content-addressed artifact store (BLAKE3), ArtifactStore trait, InMemoryArtifactStore; materialization triggers and frontier assembly not yet implemented |
+| `storage-model` | Partial | Content-addressed artifact store (BLAKE3), ArtifactStore trait, InMemoryArtifactStore, evidence bundling, file-from-disk ingestion; Python-Rust hash agreement verified; materialization triggers and frontier assembly not yet implemented |
 | `node` | Bootstrap | Phase 1 target; `init`/`inspect` commands and file-based state persistence implemented |
 | `cli` | Stub | Phase 1 target |
 
@@ -263,7 +263,7 @@ This phase should be heavily test-driven. It has been: 268 tests cover the proto
 
 1. Challenge economics and escalation (bond distribution, remedy application, escalation to governance)
 2. Staged reward release (multi-stage escrow, attribution-weighted distribution)
-3. Storage-model: materialization triggers, frontier state assembly, data availability checking (content-addressed artifact store and hash model now implemented)
+3. Storage-model: materialization triggers, frontier state assembly, data availability checking (content-addressed artifact store with BLAKE3 hashing now implemented)
 4. Successor-track creation and metric migration
 5. Cross-domain integration effects
 6. Reproducibility tolerance model (formalized thresholds beyond configurable parameters)
@@ -302,19 +302,21 @@ A single machine can host a functioning local version of the protocol and execut
 
 ## Phase 2 — Python Research Runner Integration
 
+**Status:** Partially started. Evidence bundle packaging with content-addressed hashing (BLAKE3) is implemented with verified Python-Rust hash agreement. A QMD domain-specific genesis packager exists. The autoresearch adapter implements frozen/search surface enforcement. Proposer, validator, and challenger runners are scaffolded but not yet connected to the Rust protocol core. Canonical frontier pull helper is not yet implemented.
+
 ### Goal
 
 Connect real useful-work loops to the protocol.
 
 ### Deliverables
 
-- proposer runner
-- validator runner
-- challenger runner
-- evidence bundle packager
-- domain experiment wrappers
-- canonical frontier pull helper
-- autoresearch-style adapter
+- proposer runner — scaffolded
+- validator runner — scaffolded
+- challenger runner — scaffolded
+- evidence bundle packager — **done** (BLAKE3 content-addressed hashing, Python-Rust hash agreement verified)
+- domain experiment wrappers — **partial** (QMD query-expansion genesis packager implemented)
+- canonical frontier pull helper — not started
+- autoresearch-style adapter — **partial** (frozen/search surface enforcement implemented)
 
 The Python side should support:
 
@@ -467,7 +469,7 @@ Crate layout:
   - escrow create/release/slash, epoch-gated release timing (staged rewards and attribution deferred)
 
 - `crates/storage-model/`
-  - content-addressed artifact store (BLAKE3 hashing), `ArtifactStore` trait, `InMemoryArtifactStore`, `ArtifactKind` classification, `ArtifactMetadata`, content verification
+  - content-addressed artifact store (BLAKE3 hashing), `ArtifactStore` trait, `InMemoryArtifactStore`, `ArtifactKind` classification, `ArtifactMetadata`, evidence bundling, content verification
 
 - `crates/simulator/`
   - integrated protocol state machine composing all engines, scenario test harness
@@ -480,31 +482,31 @@ Crate layout:
 
 ### Python
 
-Planned layout (not yet implemented):
+The `arc-runner` package (`python/arc_runner/`) is partially implemented:
 
 - `python/arc_runner/`
   - shared protocol client logic
 
 - `python/arc_runner/proposer/`
-  - proposer execution runner
+  - proposer execution runner (scaffolded)
 
 - `python/arc_runner/validator/`
-  - validator replay runner
+  - validator replay runner (scaffolded)
 
 - `python/arc_runner/challenger/`
-  - challenger replay/audit runner
+  - challenger replay/audit runner (scaffolded)
 
 - `python/arc_runner/autoresearch_adapter/`
-  - integration with autoresearch-style loops
+  - integration with autoresearch-style loops; frozen/search surface enforcement implemented
 
 - `python/arc_runner/domains/`
-  - domain-specific experiment wrappers
+  - domain-specific experiment wrappers; QMD query-expansion genesis packager implemented
 
 - `python/arc_runner/evidence/`
-  - evidence bundle creation and validation
+  - evidence bundle creation and validation; content-addressed hashing (BLAKE3) with Python-Rust hash agreement
 
 - `python/arc_runner/materialize/`
-  - materialized code state generation and packaging
+  - materialized code state generation and packaging (scaffolded)
 
 ### Shared
 
@@ -549,9 +551,11 @@ This is essential to the protocol's practical usability.
 
 The frontier types exist (`CanonicalFrontierState`, `MaterializedState`, `CodebaseStateRef`). The `storage-model` crate now implements content-addressed artifact storage, but reference resolution into pullable assembled states is not yet implemented.
 
-### 5. Python Runner Integration — Not done
+### 5. Python Runner Integration — Partial
 
 The chain becomes real only when it can actually receive useful work from autonomous agent loops and replay workers.
+
+The Python evidence layer now exists (`arc-runner` package): content-addressed evidence bundling with BLAKE3 hashing matching the Rust storage-model, a QMD domain-specific genesis packager, and an autoresearch adapter with frozen/search surface enforcement. Full proposer/validator/challenger runner integration with the Rust protocol core is not yet done.
 
 ---
 
@@ -588,7 +592,7 @@ The protocol needs a clean model for how it references:
 
 This should be explicit and stable early.
 
-`ArtifactHash` is defined as the type-level reference primitive. Content-addressed hashing uses BLAKE3 (32-byte output mapping directly to `ArtifactHash`). The hash is determined solely by content bytes — artifact kind is metadata, not identity. The `ArtifactStore` trait defines storage/retrieval, and `InMemoryArtifactStore` provides the in-memory implementation. Resolution of references into pullable assembled states (frontier materialization) is not yet implemented.
+`ArtifactHash` is defined as the type-level reference primitive. Content-addressed hashing uses BLAKE3 (32-byte output mapping directly to `ArtifactHash`). The hash is determined solely by content bytes — artifact kind is metadata, not identity. The `ArtifactStore` trait defines storage/retrieval, and `InMemoryArtifactStore` provides the in-memory implementation. The Python evidence layer uses the same BLAKE3 algorithm, and hash agreement between Rust and Python is verified by tests. Resolution of references into pullable assembled states (frontier materialization) is not yet implemented.
 
 ### Reproducibility Tolerance Model — Partially locked
 
@@ -681,7 +685,7 @@ This connects the protocol to actual useful work for the first time.
 These questions should stay active during implementation:
 
 - how strict should genesis activation thresholds be? — **partially resolved.** Configurable thresholds exist; real-world calibration requires testnet data.
-- how should artifact references be structured? — **resolved.** `ArtifactHash` is the reference primitive, content-addressed via BLAKE3. `ArtifactStore` trait defines storage/retrieval. `ArtifactKind` classifies artifact roles. Resolution into assembled pullable states (frontier materialization) remains open.
+- how should artifact references be structured? — **resolved.** `ArtifactHash` is the reference primitive, content-addressed via BLAKE3. `ArtifactStore` trait defines storage/retrieval. `ArtifactKind` classifies artifact roles. Python-Rust hash agreement is verified. Resolution into assembled pullable states (frontier materialization) remains open.
 - how often should frontier states be materialized? — **still open.** `MaterializationPolicyKind` enumerates trigger categories but policy evaluation is not implemented.
 - how should challenge escalation be encoded in v0? — **still open.** Basic challenge state machine works; escalation path and governance interaction are deferred.
 - how should domain-local reward accounting be represented internally? — **partially resolved.** Per-block escrow works; attribution-weighted distribution across contributors is deferred.
@@ -716,8 +720,8 @@ They are reasons to build in a way that allows change.
 ### Forward sequence
 
 1. Complete Phase 0 remaining items: challenge economics, staged rewards, storage-model references, successor-track creation, cross-domain effects.
-2. Implement local single-node runtime (Phase 1): persistence, transaction flow, state queries, CLI.
-3. Implement Python runner integration (Phase 2): proposer, validator, challenger connecting to local runtime.
+2. Complete local single-node runtime (Phase 1): transaction flow, state queries, CLI commands (persistence already implemented).
+3. Complete Python runner integration (Phase 2): connect proposer, validator, challenger runners to local runtime (evidence bundling, QMD genesis packaging, and surface enforcement already implemented).
 4. Implement frontier materialization and artifact resolution (Phase 3).
 5. Run sustained adversarial simulations (Phase 4, can overlap with Phase 2/3).
 
