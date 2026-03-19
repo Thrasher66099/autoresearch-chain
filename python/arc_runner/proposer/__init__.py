@@ -28,19 +28,127 @@ A proposer runs the Stage 1 research-mining loop:
        manifest, dataset refs, logs, metrics).
     5. Submit the block to the protocol.
 
-This module will implement:
-    - Frontier state pulling and local workspace setup
-    - Experiment execution orchestration
-    - Diff generation (parent → child)
-    - Evidence bundle assembly
-    - Block submission formatting
-
-Implementation status:
-    Not yet implemented. Depends on protocol client interface
-    and evidence bundle schema.
+The runner does NOT own experiment execution — the experiment function
+is injected by the caller. The runner handles protocol interaction only:
+frontier query, block construction, and submission. This keeps it
+testable with synthetic experiment data.
 """
 
-# TODO: Define ProposerRunner class or entry point.
-# TODO: Define frontier pull interface (likely talks to arc-node or arc-simulator).
-# TODO: Define evidence bundle packaging pipeline.
-# TODO: Define block submission formatting.
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+
+from arc_runner.client import ArcNodeClient, generate_id
+from arc_runner.evidence import EvidenceBundler, blake3_bytes
+
+
+@dataclass
+class ProposerConfig:
+    """Configuration for a proposer runner."""
+
+    node_binary: str    # path to arc-node binary
+    state_path: str     # path to protocol state file
+    store_dir: str      # path to artifact store
+    domain_id: str      # 64-char hex domain ID
+    proposer_id: str    # 64-char hex proposer ID
+    genesis_id: str     # 64-char hex genesis block ID (parent for first block)
+    bond: int           # bond amount per block
+    fee: int            # fee per block
+
+
+class ProposerRunner:
+    """Executes the Stage 1 proposer loop.
+
+    The runner queries the protocol for the current frontier,
+    delegates experiment execution to a caller-provided function,
+    packages the result as an evidence bundle, and submits a block.
+
+    It does NOT run experiments itself — the experiment function
+    is injected, keeping the runner protocol-focused.
+    """
+
+    def __init__(self, config: ProposerConfig) -> None:
+        self.client = ArcNodeClient(config.state_path, config.node_binary)
+        self.bundler = EvidenceBundler(config.store_dir)
+        self.config = config
+
+    def get_frontier_parent(self) -> str:
+        """Query the protocol for the current frontier block ID.
+
+        Returns the block ID to use as parent. If no frontier exists
+        (fresh domain with no accepted blocks), falls back to the
+        genesis block ID from the config.
+        """
+        result = self.client.show_frontier(self.config.domain_id)
+        frontier = result.get("canonical_frontier")
+        if frontier is None:
+            return self.config.genesis_id
+        return frontier
+
+    def submit_block(
+        self,
+        parent_id: str,
+        experiment_result: dict,
+    ) -> dict:
+        """Package experiment result and submit a block to the protocol.
+
+        Args:
+            parent_id: The block ID of the parent (frontier) block.
+            experiment_result: A dict from AutoresearchAdapter.capture_result()
+                or equivalent, containing at minimum:
+                - evidence_bundle: an EvidenceBundle with all artifact hashes
+                - delta: the claimed metric improvement
+
+        Returns:
+            The arc-node response dict from submit-block.
+
+        The method:
+            1. Computes the evidence_bundle_hash from all artifact hashes
+            2. Computes a child_state_ref from the diff hash
+            3. Generates a unique block ID via BLAKE3
+            4. Constructs the Block JSON
+            5. Calls client.submit_block()
+        """
+        evidence_bundle = experiment_result["evidence_bundle"]
+        delta = experiment_result["delta"]
+
+        # Evidence bundle hash: BLAKE3 of sorted artifact hashes concatenated.
+        sorted_hashes = sorted(evidence_bundle.all_hashes())
+        bundle_hash_input = "".join(sorted_hashes).encode("utf-8")
+        evidence_bundle_hash = blake3_bytes(bundle_hash_input)
+
+        # Child state ref: BLAKE3 of the diff content hash.
+        # For Phase 2, this is the diff hash itself — full materialized
+        # state references are deferred to Phase 3.
+        child_state_ref = evidence_bundle.diff_hash
+
+        # Diff ref: the diff hash from the evidence bundle.
+        diff_ref = evidence_bundle.diff_hash
+
+        # Generate a unique block ID.
+        timestamp = int(time.time())
+        block_id = generate_id(
+            self.config.proposer_id.encode("utf-8"),
+            parent_id.encode("utf-8"),
+            diff_ref.encode("utf-8"),
+            str(timestamp).encode("utf-8"),
+        )
+
+        block = {
+            "id": block_id,
+            "domain_id": self.config.domain_id,
+            "parent_id": parent_id,
+            "proposer": self.config.proposer_id,
+            "child_state_ref": child_state_ref,
+            "diff_ref": diff_ref,
+            "claimed_metric_delta": delta,
+            "evidence_bundle_hash": evidence_bundle_hash,
+            "fee": self.config.fee,
+            "bond": self.config.bond,
+            "epoch_id": 1,
+            "status": "Submitted",
+            "timestamp": timestamp,
+        }
+
+        return self.client.submit_block(block)

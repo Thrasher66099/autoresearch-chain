@@ -33,5 +33,12 @@ Subpackages:
     materialize         — Materialized code state generation and packaging
 
 Implementation status:
-    Not yet implemented. Stubs only.
+    client              — Implemented (wraps arc-node CLI via subprocess)
+    proposer            — Implemented (frontier query, block submission)
+    validator           — Implemented (block discovery, attestation submission)
+    evidence            — Implemented (BLAKE3 hashing, content-addressed store)
+    autoresearch_adapter — Implemented (frontier pull, surface enforcement)
+    domains             — Partial (QMD genesis packager implemented)
+    challenger          — Stub only
+    materialize         — Stub only
 """
