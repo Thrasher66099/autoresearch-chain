@@ -170,7 +170,7 @@ Phase 0 is substantially complete. The Rust workspace contains 10 crates (~10,60
 | `reward-engine` | Partial | Escrow create/release/slash implemented; staged rewards, attribution distribution deferred |
 | `simulator` | Implemented | Integrated state machine composing all engines; 51 scenario tests; whole-state snapshot persistence (serde JSON) |
 | `storage-model` | Partial | Content-addressed artifact store (BLAKE3), ArtifactStore trait, InMemoryArtifactStore, evidence bundling, file-from-disk ingestion; Python-Rust hash agreement verified; materialization triggers and frontier assembly not yet implemented |
-| `node` | Bootstrap | Phase 1 target; `init`/`inspect` commands and file-based state persistence implemented |
+| `node` | Partial | Phase 1 target; file-based state persistence, CLI transaction submission (14 write commands), and state queries (5 read commands) implemented; event log / state-transition trace not yet implemented |
 | `cli` | Stub | Phase 1 target |
 
 ### Protocol-truth hardening
@@ -272,7 +272,7 @@ This phase should be heavily test-driven. It has been: 268 tests cover the proto
 
 ## Phase 1 — Local Single-Node Runtime
 
-**Status:** Bootstrap started. Whole-state snapshot persistence implemented (JSON file save/load). Node binary has `init` and `inspect` commands. Full transaction submission flow, state queries, and CLI commands remain to be built.
+**Status:** Transaction submission and query interface implemented. The node binary exposes CLI commands for all protocol actions (genesis lifecycle, block lifecycle, challenges, epoch advancement) and state queries (domains, blocks, frontiers, challenges). Each command maps 1:1 to a `SimulatorState` method with JSON input/output. Event log / state-transition trace remains to be built.
 
 ### Goal
 
@@ -281,18 +281,10 @@ Wrap the protocol core in a minimal executable local runtime.
 ### Deliverables
 
 - single-node chain state persistence — **done** (whole-state JSON snapshot; incremental persistence deferred)
-- transaction-like submission flow for:
-  - genesis proposals
-  - blocks
-  - attestations
-  - challenges
-- local state queries
+- transaction-like submission flow — **done** (CLI commands for genesis proposals, blocks, attestations, challenges, epoch advancement; each maps 1:1 to SimulatorState methods)
+- local state queries — **done** (list-domains, show-block, show-frontier, show-challenge, list-blocks with optional domain filter)
 - event log or state-transition trace
-- minimal CLI commands for:
-  - inspect domains
-  - inspect tracks
-  - inspect frontiers
-  - submit local actions
+- minimal CLI commands — **done** (19 commands covering all protocol actions and queries; `--state` flag for state file path; JSON output to stdout, errors to stderr)
 
 ### Success condition
 
