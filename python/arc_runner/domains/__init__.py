@@ -26,12 +26,43 @@ handle the concrete execution details.
 A domain wrapper translates between the protocol's abstract
 experiment interface and the actual training/evaluation machinery
 for a specific research arena.
-
-Implementation status:
-    Not yet implemented. Domain wrappers will be added as
-    specific research tracks are created.
 """
 
-# TODO: Define DomainWrapper base class or protocol.
-# TODO: Define experiment execution interface.
-# TODO: Define metric extraction interface.
+from __future__ import annotations
+
+from arc_runner.client import generate_id
+
+
+def prepare_genesis(packager_output: dict, proposer_id: str) -> dict:
+    """Add protocol identity fields to a domain packager output.
+
+    Generates a content-addressed genesis ID from the seed artifact
+    hashes and sets domain_id = genesis_id (protocol convention for
+    genesis blocks, matching crates/node/tests/integration.rs).
+
+    Parameters
+    ----------
+    packager_output : dict
+        Raw output from a domain-specific packager (e.g. QMDGenesisPackager).
+    proposer_id : str
+        64-char hex ID of the proposer submitting this genesis.
+
+    Returns
+    -------
+    dict
+        A copy of packager_output with ``id``, ``domain_id``, and
+        ``proposer`` fields set.
+    """
+    genesis = dict(packager_output)
+
+    genesis_id = generate_id(
+        genesis["seed_recipe_ref"].encode("utf-8"),
+        genesis["seed_codebase_state_ref"].encode("utf-8"),
+        genesis["canonical_dataset_ref"].encode("utf-8"),
+        str(genesis["timestamp"]).encode("utf-8"),
+    )
+    genesis["id"] = genesis_id
+    genesis["domain_id"] = genesis_id
+    genesis["proposer"] = proposer_id
+
+    return genesis

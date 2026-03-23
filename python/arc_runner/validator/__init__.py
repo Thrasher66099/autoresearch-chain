@@ -31,6 +31,7 @@ runner handles protocol interaction only.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 
@@ -81,23 +82,45 @@ class ValidatorRunner:
         return pending
 
     def fetch_evidence(self, block: dict) -> dict | None:
-        """Fetch the evidence bundle artifacts for a block from the local store.
+        """Fetch and parse the evidence manifest for a block.
 
-        Looks up the evidence_bundle_hash from the block and checks
-        that the artifact exists in the local store.
+        The proposer stores a JSON manifest as the evidence bundle
+        artifact.  This method fetches the manifest by its hash,
+        deserializes it to discover individual artifact hashes,
+        and checks that all referenced artifacts exist in the
+        local store.
 
-        Returns a dict with the evidence_bundle_hash and whether
-        it was found, or None if the block has no evidence hash.
+        Returns a dict with:
+            - ``evidence_bundle_hash``: the manifest hash
+            - ``available``: True if all individual artifacts exist
+            - ``manifest``: the parsed manifest dict (if fetched)
+
+        Returns None if the block has no evidence hash.
         """
         block_data = block.get("block", block)
         evidence_hash = block_data.get("evidence_bundle_hash")
         if evidence_hash is None:
             return None
 
-        found = self.bundler.exists(evidence_hash)
+        manifest_bytes = self.bundler.fetch(evidence_hash)
+        if manifest_bytes is None:
+            return {
+                "evidence_bundle_hash": evidence_hash,
+                "available": False,
+            }
+
+        manifest = json.loads(manifest_bytes)
+        # Check that all individual artifacts referenced by the manifest
+        # exist in the local store.
+        all_available = all(
+            self.bundler.exists(h)
+            for h in manifest.values()
+            if isinstance(h, str) and len(h) == 64
+        )
         return {
             "evidence_bundle_hash": evidence_hash,
-            "available": found,
+            "available": all_available,
+            "manifest": manifest,
         }
 
     def submit_attestation(

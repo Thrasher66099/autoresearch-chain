@@ -39,7 +39,10 @@ from pathlib import Path
 
 import pytest
 
+from arc_runner.autoresearch_adapter import AutoresearchAdapter
 from arc_runner.client import ArcNodeClient, ProtocolError, generate_id
+from arc_runner.domains import prepare_genesis
+from arc_runner.domains.qmd_query_expansion import QMDGenesisPackager
 from arc_runner.evidence import EvidenceBundle, EvidenceBundler, blake3_bytes
 from arc_runner.proposer import ProposerConfig, ProposerRunner
 from arc_runner.validator import ValidatorConfig, ValidatorRunner
@@ -585,3 +588,268 @@ class TestRunnerIntegration:
         # Verify final state.
         inspect_text = client.inspect()
         assert "Epoch:" in inspect_text
+
+
+# ---------------------------------------------------------------------------
+# Full pipeline: real component outputs through the protocol
+# ---------------------------------------------------------------------------
+
+# Finetune directory content (matches test_qmd_genesis.py fixtures).
+
+_REWARD_PY = b"""\
+# Reward function for QMD query expansion scoring.
+def compute_reward(query: str, expansion: str) -> float:
+    score = 0.0
+    if "<think>" in expansion and "</think>" in expansion:
+        score += 30.0
+    terms = set(expansion.lower().split())
+    score += min(30.0, len(terms) * 0.5)
+    if len(expansion) > 50:
+        score += 20.0
+    score += 20.0
+    return min(score / 140.0, 1.0)
+"""
+
+_EVAL_PY = b"""\
+import json
+def evaluate(model_path: str, queries_path: str) -> dict:
+    return {"average_score": 0.92, "num_queries": 80, "excellent_count": 30}
+"""
+
+_QUERIES_TXT = b"""\
+best pizza restaurants near me
+how to learn Python programming
+climate change effects on coral reefs
+latest iPhone reviews and comparisons
+history of the Roman Empire
+"""
+
+_TRAIN_PY = b"""\
+def train(config_path: str):
+    print(f"Training with config: {config_path}")
+"""
+
+_SFT_CONFIG = b"""\
+model_name: Qwen3-1.7B
+lora_rank: 16
+epochs: 5
+learning_rate: 2e-5
+batch_size: 4
+"""
+
+_DATASET = b"""\
+{"query": "best pizza", "expansion": "<think>pizza types</think> best pizza restaurants near me"}
+{"query": "learn python", "expansion": "<think>programming</think> how to learn Python programming"}
+{"query": "climate change", "expansion": "<think>environment</think> climate change effects"}
+"""
+
+
+def _make_finetune_dir(base: Path) -> Path:
+    """Create a synthetic QMD finetune directory."""
+    ft = base / "finetune"
+    ft.mkdir()
+    (ft / "reward.py").write_bytes(_REWARD_PY)
+    (ft / "eval.py").write_bytes(_EVAL_PY)
+    (ft / "evals").mkdir()
+    (ft / "evals" / "queries.txt").write_bytes(_QUERIES_TXT)
+    (ft / "train.py").write_bytes(_TRAIN_PY)
+    (ft / "configs").mkdir()
+    (ft / "configs" / "sft.yaml").write_bytes(_SFT_CONFIG)
+    (ft / "data").mkdir()
+    (ft / "data" / "train_00.jsonl").write_bytes(_DATASET)
+    (ft / "data" / "train_01.jsonl").write_bytes(_DATASET + b"\n")
+    return ft
+
+
+class TestFullPipeline:
+    """End-to-end pipeline using real component outputs.
+
+    Exercises the full flow: QMD genesis packager → prepare_genesis() →
+    protocol submission → autoresearch adapter → proposer → validator
+    evidence fetch → attestation → evaluation.
+    """
+
+    def test_packager_genesis_through_protocol(
+        self,
+        arc_node_bin: str,
+        work_dir: Path,
+        state_path: str,
+        store_dir: Path,
+        client: ArcNodeClient,
+    ):
+        """Package a QMD genesis, bridge it, and activate through the protocol."""
+        proposer_id = hex_id(1)
+
+        # 1. Package genesis from synthetic finetune directory.
+        finetune_dir = _make_finetune_dir(work_dir)
+        packager = QMDGenesisPackager(finetune_dir, store_dir)
+        raw_genesis = packager.package()
+
+        # 2. Bridge: add protocol identity fields.
+        genesis = prepare_genesis(raw_genesis, proposer_id)
+        assert len(genesis["id"]) == 64
+        assert genesis["domain_id"] == genesis["id"]
+        assert genesis["proposer"] == proposer_id
+
+        # 3. Submit through the protocol.
+        result = client.submit_genesis(genesis)
+        assert result["genesis_id"] == genesis["id"]
+
+        # 4. Conformance check.
+        result = client.evaluate_conformance(genesis["id"])
+        assert result["status"] == "conformance_passed"
+
+        # 5. Seed validations.
+        for i in range(1, 4):
+            result = client.record_seed_validation(
+                genesis["id"], seed_validation_data(i)
+            )
+            assert result["status"] == "seed_validation_recorded"
+
+        # 6. Activate.
+        result = client.finalize_activation(genesis["id"])
+        assert result["status"] == "domain_activated"
+        assert result["domain_id"] == genesis["domain_id"]
+
+        # 7. Register validators.
+        pool = {
+            "domain_id": genesis["domain_id"],
+            "validators": [hex_id(i) for i in range(1, 11)],
+        }
+        result = client.register_validators(pool)
+        assert result["status"] == "validators_registered"
+
+        # 8. Verify domain is listed.
+        result = client.list_domains()
+        assert result["domain_count"] == 1
+
+    def test_adapter_through_proposer_and_validator(
+        self,
+        arc_node_bin: str,
+        work_dir: Path,
+        state_path: str,
+        store_dir: Path,
+        client: ArcNodeClient,
+    ):
+        """Full pipeline: adapter experiment → proposer submit → validator evidence fetch."""
+        import shutil
+
+        proposer_id = hex_id(1)
+
+        # --- Activate domain using real packager output ---
+
+        finetune_dir = _make_finetune_dir(work_dir)
+        packager = QMDGenesisPackager(finetune_dir, store_dir)
+        raw_genesis = packager.package()
+        genesis = prepare_genesis(raw_genesis, proposer_id)
+
+        client.submit_genesis(genesis)
+        client.evaluate_conformance(genesis["id"])
+        for i in range(1, 4):
+            client.record_seed_validation(genesis["id"], seed_validation_data(i))
+        client.finalize_activation(genesis["id"])
+        pool = {
+            "domain_id": genesis["domain_id"],
+            "validators": [hex_id(i) for i in range(1, 11)],
+        }
+        client.register_validators(pool)
+
+        domain_id = genesis["domain_id"]
+        genesis_id = genesis["id"]
+
+        # --- Adapter: pull frontier and capture result ---
+
+        adapter = AutoresearchAdapter(raw_genesis, store_dir)
+        workspace = adapter.pull_frontier()
+        try:
+            # Enforce surfaces — should pass on untouched workspace.
+            adapter.enforce_surfaces(workspace)
+
+            # Create synthetic experiment output files in the workspace.
+            workspace_path = Path(workspace)
+            (workspace_path / "config.yaml").write_text(
+                "lr: 0.0005\nepochs: 10\n"
+            )
+            (workspace_path / "training.log").write_text(
+                "epoch 1: loss=0.5\nepoch 2: loss=0.3\n"
+            )
+            (workspace_path / "metrics.json").write_text(
+                '{"reward_score": 0.945, "loss": 0.28}'
+            )
+
+            # Capture result.
+            seed_score = raw_genesis["seed_score"]
+            experiment_result = adapter.capture_result(workspace, seed_score)
+            assert experiment_result["delta"] > 0
+            assert adapter.should_submit(experiment_result)
+        finally:
+            shutil.rmtree(workspace, ignore_errors=True)
+
+        # --- Proposer: submit block ---
+
+        proposer_config = ProposerConfig(
+            node_binary=arc_node_bin,
+            state_path=state_path,
+            store_dir=str(store_dir),
+            domain_id=domain_id,
+            proposer_id=proposer_id,
+            genesis_id=genesis_id,
+            bond=500,
+            fee=10,
+        )
+        proposer = ProposerRunner(proposer_config)
+
+        parent_id = proposer.get_frontier_parent()
+        assert parent_id == genesis_id
+
+        result = proposer.submit_block(parent_id, experiment_result)
+        block_id = result["block_id"]
+        assert len(block_id) == 64
+
+        # --- Protocol: assign validators ---
+
+        assign_result = client.assign_validators(block_id)
+        assigned = assign_result["assigned_validators"]
+        assert len(assigned) == 3
+
+        # --- Validator: fetch evidence and attest ---
+
+        block_detail = client.show_block(block_id)
+
+        for validator_hex in assigned:
+            validator_config = ValidatorConfig(
+                node_binary=arc_node_bin,
+                state_path=state_path,
+                store_dir=str(store_dir),
+                domain_id=domain_id,
+                validator_id=validator_hex,
+            )
+            validator = ValidatorRunner(validator_config)
+
+            # Fetch evidence — must find the manifest and all artifacts.
+            evidence_info = validator.fetch_evidence(block_detail)
+            assert evidence_info is not None
+            assert evidence_info["available"] is True
+            assert "manifest" in evidence_info
+            manifest = evidence_info["manifest"]
+            assert "diff_hash" in manifest
+            assert "config_hash" in manifest
+            assert "training_log_hash" in manifest
+            assert "metric_output_hash" in manifest
+            assert "env_manifest_hash" in manifest
+
+            # Submit attestation.
+            replay_ref = hex_id(70)
+            result = validator.submit_attestation(
+                block_id, "Pass", experiment_result["delta"], replay_ref
+            )
+            assert result["status"] == "attestation_recorded"
+
+        # --- Protocol: evaluate block ---
+
+        result = client.evaluate_block(block_id)
+        assert result["outcome"] == "Accepted"
+
+        # Verify frontier updated.
+        frontier = client.show_frontier(domain_id)
+        assert frontier["canonical_frontier"] == block_id

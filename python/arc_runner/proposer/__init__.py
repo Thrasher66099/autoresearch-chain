@@ -40,7 +40,7 @@ import time
 from dataclasses import dataclass
 
 from arc_runner.client import ArcNodeClient, generate_id
-from arc_runner.evidence import EvidenceBundler, blake3_bytes
+from arc_runner.evidence import EvidenceBundler
 
 
 @dataclass
@@ -104,19 +104,26 @@ class ProposerRunner:
             The arc-node response dict from submit-block.
 
         The method:
-            1. Computes the evidence_bundle_hash from all artifact hashes
+            1. Stores the evidence manifest and computes evidence_bundle_hash
             2. Computes a child_state_ref from the diff hash
             3. Generates a unique block ID via BLAKE3
             4. Constructs the Block JSON
             5. Calls client.submit_block()
+
+        Raises:
+            ValueError: If evidence_bundle is None.
         """
-        evidence_bundle = experiment_result["evidence_bundle"]
+        evidence_bundle = experiment_result.get("evidence_bundle")
+        if evidence_bundle is None:
+            raise ValueError("Cannot submit block: evidence_bundle is None")
+
         delta = experiment_result["delta"]
 
-        # Evidence bundle hash: BLAKE3 of sorted artifact hashes concatenated.
-        sorted_hashes = sorted(evidence_bundle.all_hashes())
-        bundle_hash_input = "".join(sorted_hashes).encode("utf-8")
-        evidence_bundle_hash = blake3_bytes(bundle_hash_input)
+        # Store the evidence manifest as a retrievable artifact and use
+        # its hash as evidence_bundle_hash.  The validator can fetch this
+        # manifest to discover individual artifact hashes.
+        manifest_bytes = evidence_bundle.to_manifest_bytes()
+        evidence_bundle_hash = self.bundler.hash_bytes(manifest_bytes)
 
         # Child state ref: BLAKE3 of the diff content hash.
         # For Phase 2, this is the diff hash itself — full materialized
