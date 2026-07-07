@@ -4,20 +4,32 @@ Python research execution runners for AutoResearch Chain.
 
 ## Status
 
-Phase 0 scaffold. Package structure and module stubs are in place. No runner logic is implemented yet.
+Phase 2 substantially complete. Proposer, validator, and challenger runners are
+implemented and exercised end-to-end against the Rust `arc-node` binary,
+including a real-computation demo (`python -m arc_runner.demo`) that runs the
+full protocol lifecycle on the QMD query-expansion domain. Frontier
+materialization (`arc_runner/materialize/`) remains a stub.
 
 ## Package Layout
 
 | Module | Purpose |
 |--------|---------|
-| `arc_runner/` | Top-level package; shared protocol client logic (future) |
-| `arc_runner/proposer/` | Proposer execution runner — runs experiments and submits blocks |
-| `arc_runner/validator/` | Validator replay runner — replays transitions and generates attestations |
-| `arc_runner/challenger/` | Challenger replay/audit runner — disputes suspect claims |
-| `arc_runner/autoresearch_adapter/` | Integration with autoresearch-style autonomous agent loops |
-| `arc_runner/domains/` | Domain-specific experiment wrappers |
-| `arc_runner/evidence/` | Evidence bundle creation and validation |
-| `arc_runner/materialize/` | Materialized code state generation and packaging |
+| `arc_runner/client.py` | `ArcNodeClient` — protocol transport; shells the `arc-node` CLI, one state transition per invocation, JSON in/out |
+| `arc_runner/proposer/` | Proposer runner — queries the frontier, submits blocks with evidence bundles |
+| `arc_runner/validator/` | Validator runner — finds pending blocks, fetches evidence, submits replay attestations |
+| `arc_runner/challenger/` | Challenger runner — finds suspect blocks, fetches evidence, opens bonded challenges |
+| `arc_runner/autoresearch_adapter/` | Pulls frontier state, enforces frozen/search surfaces, captures results into evidence bundles |
+| `arc_runner/domains/` | Domain-specific experiment wrappers — QMD genesis packaging and training/eval/replay engine |
+| `arc_runner/evidence/` | Content-addressed (BLAKE3) evidence bundle creation, matching the Rust storage model |
+| `arc_runner/materialize/` | (Stub) Materialized code state generation and packaging |
+| `arc_runner/demo.py` | End-to-end lifecycle demo with real computation (requires a built `arc-node`) |
+
+## Requirements
+
+Integration tests and the demo shell out to the `arc-node` binary. Build it
+first from the repo root (`cargo build`); it is located via the `ARC_NODE_BIN`
+environment variable or `target/{debug,release}/arc-node`. Tests that need it
+skip automatically when it is absent.
 
 ## Development
 
