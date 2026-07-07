@@ -482,6 +482,16 @@ pub fn run_episode(world: &WorldConfig, actors: &Actors) -> EpisodeReport {
         *net.entry(dist.challenger).or_default() +=
             dist.challenger_payout.as_u64() as f64;
     }
+    // Real protocol fee flows (economics step 3): proposers pay their
+    // block fee; attesting validators receive their shares.
+    for block in sim.blocks.values() {
+        *net.entry(ParticipantId::from_bytes(*block.proposer.as_bytes()))
+            .or_default() -= block.fee.as_u64() as f64;
+    }
+    for payout in &sim.fee_payouts {
+        *net.entry(ParticipantId::from_bytes(*payout.validator.as_bytes()))
+            .or_default() += payout.amount.as_u64() as f64;
+    }
     for (pid, cost) in &costs {
         *net.entry(*pid).or_default() -= cost;
     }

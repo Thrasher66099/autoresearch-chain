@@ -32,7 +32,7 @@ use arc_protocol_types::{
     Block, BlockId, BlockStatus, ChallengeId, ChallengeRecord, ChallengeTarget,
     ChallengeType, DerivedValidity, DomainId, EpochId, EscrowId, EscrowKind,
     EscrowRecord, EscrowStatus, ForkFamilyId, GenesisBlock, GenesisBlockId,
-    MetricDirection, MetricValue, ParticipantId, SlashDistribution, TokenAmount,
+    FeePayout, MetricDirection, MetricValue, ParticipantId, SlashDistribution, TokenAmount,
     ValidatedBlockOutcome, ValidationAttestation, ArtifactHash,
 };
 
@@ -112,6 +112,9 @@ pub struct SimulatorState {
     /// Validator registration bond escrows (attestation slashing).
     #[serde(default)]
     pub validator_bond_escrows: HashMap<arc_protocol_types::ValidatorId, EscrowId>,
+    /// Proposer-fee shares paid to attesting validators.
+    #[serde(default)]
+    pub fee_payouts: Vec<FeePayout>,
 }
 
 /// Reward-pool accounting for a funded domain.
@@ -165,6 +168,7 @@ impl SimulatorState {
             require_signatures: false,
             domain_pools: HashMap::new(),
             validator_bond_escrows: HashMap::new(),
+            fee_payouts: Vec::new(),
         }
     }
 
@@ -515,6 +519,34 @@ impl SimulatorState {
 
         block_lifecycle::complete_validation(block, outcome, &self.validation_config)
             .map_err(|e| e.to_string())?;
+
+        // Distribute the proposer's fee equally among the validators who
+        // actually attested (economics step 3). Validation work is paid
+        // whether the block passes or fails — the fee compensates replay,
+        // not agreement; laziness is deterred by attestation slashing,
+        // not by withholding pay. Division remainder is burned. Exactly
+        // once per block.
+        if !self.fee_payouts.iter().any(|f| f.block_id == *block_id) {
+            let fee = self
+                .blocks
+                .get(block_id)
+                .map(|b| b.fee.as_u64())
+                .unwrap_or(0);
+            let attesters: Vec<_> = atts.iter().map(|a| a.validator).collect();
+            if fee > 0 && !attesters.is_empty() {
+                let share = fee / attesters.len() as u64;
+                if share > 0 {
+                    for v in attesters {
+                        self.fee_payouts.push(FeePayout {
+                            block_id: *block_id,
+                            validator: v,
+                            amount: TokenAmount::new(share),
+                            epoch: self.current_epoch,
+                        });
+                    }
+                }
+            }
+        }
 
         // If accepted, proceed through challenge window.
         if outcome == ProvisionalOutcome::Accepted {
