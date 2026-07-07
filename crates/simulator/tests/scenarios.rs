@@ -2460,3 +2460,65 @@ fn scenario_aj_rejected_block_still_pays_validation_work() {
     let bond = sim.block_escrow(&block_id).unwrap();
     assert_eq!(bond.status, EscrowStatus::Released);
 }
+
+// =======================================================================
+// Scenario AK: emissions subsidy (economics step 4)
+// =======================================================================
+
+/// Drive a funded-domain block through settlement.
+fn settle_funded_block(sim: &mut SimulatorState, n: u8, genesis_id: GenesisBlockId, domain_id: DomainId) {
+    let block = make_block(n, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(sim, block);
+    sim.close_challenge_window(&block_id).unwrap();
+    for _ in 0..5 {
+        sim.advance_epoch();
+    }
+    sim.settle_block(&block_id).unwrap();
+}
+
+#[test]
+fn scenario_ak_subsidy_matches_bounty_at_settlement() {
+    let (mut sim, domain_id, genesis_id) = setup_funded_domain();
+    sim.reward_config.subsidy_total_cap = 10_000;
+    sim.reward_config.subsidy_rate_bps = 5_000; // 50% match
+
+    settle_funded_block(&mut sim, 10, genesis_id, domain_id);
+
+    // Block reward 1000 -> 50% match = 500 minted to the proposer.
+    assert_eq!(sim.subsidy_payouts.len(), 1);
+    assert_eq!(sim.subsidy_payouts[0].amount, TokenAmount::new(500));
+    assert_eq!(sim.subsidy_minted_total, 500);
+}
+
+#[test]
+fn scenario_ak_subsidy_respects_caps_halving_and_legacy() {
+    // Legacy: zero cap mints nothing even with a rate set.
+    let (mut sim, domain_id, genesis_id) = setup_funded_domain();
+    sim.reward_config.subsidy_rate_bps = 5_000;
+    settle_funded_block(&mut sim, 10, genesis_id, domain_id);
+    assert!(sim.subsidy_payouts.is_empty());
+
+    // Total cap binds: cap 300 < 500 match -> mints only 300.
+    let (mut sim, domain_id, genesis_id) = setup_funded_domain();
+    sim.reward_config.subsidy_total_cap = 300;
+    sim.reward_config.subsidy_rate_bps = 5_000;
+    settle_funded_block(&mut sim, 10, genesis_id, domain_id);
+    assert_eq!(sim.subsidy_minted_total, 300);
+
+    // Halving decay: settlement lands at epoch 5; with halving every 2
+    // epochs the 50% rate has halved twice -> 12.5% of 1000 = 125.
+    let (mut sim, domain_id, genesis_id) = setup_funded_domain();
+    sim.reward_config.subsidy_total_cap = 10_000;
+    sim.reward_config.subsidy_rate_bps = 5_000;
+    sim.reward_config.subsidy_halving_epochs = 2;
+    settle_funded_block(&mut sim, 10, genesis_id, domain_id);
+    assert_eq!(sim.subsidy_minted_total, 125);
+
+    // Unfunded domains never earn subsidy (matching requires a bounty).
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    sim.reward_config.subsidy_total_cap = 10_000;
+    sim.reward_config.subsidy_rate_bps = 5_000;
+    settle_funded_block(&mut sim, 10, genesis_id, domain_id);
+    assert!(sim.subsidy_payouts.is_empty());
+}

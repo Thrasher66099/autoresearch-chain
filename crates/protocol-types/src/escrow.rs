@@ -96,6 +96,22 @@ pub struct FeePayout {
     pub epoch: EpochId,
 }
 
+/// Auditable record of emissions-subsidy minting for a settled block
+/// on a funded domain (economics step 4). The subsidy matches bounty
+/// spending at a decaying rate under hard caps — it amplifies bounty
+/// funding, never replaces it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubsidyPayout {
+    /// The settled block that earned the match.
+    pub block_id: BlockId,
+    /// The proposer receiving the minted subsidy.
+    pub proposer: ParticipantId,
+    /// Amount minted.
+    pub amount: TokenAmount,
+    /// Epoch of minting.
+    pub epoch: EpochId,
+}
+
 /// Auditable record of how slashed funds were distributed after an
 /// upheld challenge.
 ///

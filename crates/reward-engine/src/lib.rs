@@ -76,6 +76,22 @@ pub struct RewardConfig {
     /// challenger, in basis points (e.g. 5_000 = 50%). The residual is
     /// burned.
     pub challenger_payout_bps: u64,
+    /// Hard cap on total emissions-subsidy minting, ever. Zero disables
+    /// the subsidy (legacy/test states and the pure-bounty end state).
+    #[serde(default)]
+    pub subsidy_total_cap: u64,
+    /// Initial subsidy match rate in basis points: an eligible settled
+    /// block mints `rate x bounty_reward_paid` (bounty-matching — the
+    /// subsidy amplifies bounty funding, never replaces it).
+    #[serde(default)]
+    pub subsidy_rate_bps: u64,
+    /// Per-epoch minting cap (bounds wash-mining extraction per epoch).
+    #[serde(default)]
+    pub subsidy_epoch_cap: u64,
+    /// The match rate halves every this many epochs (halving decay).
+    /// Zero means no decay.
+    #[serde(default)]
+    pub subsidy_halving_epochs: u64,
 }
 
 impl Default for RewardConfig {
@@ -85,6 +101,25 @@ impl Default for RewardConfig {
             base_block_reward: 1_000,
             provisional_reward_bps: 2_000,
             challenger_payout_bps: 5_000,
+            subsidy_total_cap: 0,
+            subsidy_rate_bps: 0,
+            subsidy_epoch_cap: 0,
+            subsidy_halving_epochs: 0,
+        }
+    }
+}
+
+impl RewardConfig {
+    /// Effective subsidy match rate at an epoch, after halving decay.
+    pub fn subsidy_rate_at_epoch(&self, epoch: u64) -> u64 {
+        if self.subsidy_halving_epochs == 0 {
+            return self.subsidy_rate_bps;
+        }
+        let halvings = epoch / self.subsidy_halving_epochs;
+        if halvings >= 64 {
+            0
+        } else {
+            self.subsidy_rate_bps >> halvings
         }
     }
 }
