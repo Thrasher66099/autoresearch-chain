@@ -59,12 +59,15 @@ A genesis proposal escrows a **reward pool** alongside its seed bond:
   bounty_reward_paid, remaining_epoch_subsidy)`. Matching (rather than
   flat per-block emission) means subsidy flows only to domains someone
   already valued enough to fund, which blunts wash-mining.
-- **Wash-mining defense** (self-bounty to farm subsidy): matching means
-  a self-funder pays ≥ 1/subsidy_rate of every token minted to
-  themselves and loses the pool spend to other miners, validation
-  reserve, and burns; per-domain and per-epoch subsidy caps
-  (*calibratable*) bound residual extraction. This must be a named
-  scenario in the adversarial harness before launch.
+- **Wash-mining defense** (self-bounty to farm subsidy): adversarial
+  testing showed the matching ratio alone does NOT make full
+  self-dealing unprofitable — an attacker who funds, mines, and
+  validates their own domain recycles the pool spend back to
+  themselves. The binding defenses are the **per-epoch and lifetime
+  subsidy caps** (pinned by the `wash_mining_extraction_is_bounded_by_
+  subsidy_caps` scenario: extraction is hard-bounded regardless of pool
+  size) plus open validator assignment taking fees on a real network.
+  Cap sizing is therefore a first-order launch parameter, not a detail.
 - End state: when the cap exhausts, the chain is pure-bounty. The design
   target (*calibratable*) is bounty income exceeding subsidy income
   within the first two halvings.
@@ -132,6 +135,5 @@ default for unfunded test states only.
 2. Bond-at-submission + attestation slashing — **implemented** (bond escrow committed in `submit_block`, released on rejection — slashing requires adjudication, never a vote tally; validators post registration bonds when `validator_bond > 0`, slashed by upheld attestation challenges with the standard challenger payout split, leaving the block itself governed by its own challenges).
 3. Proposer-fee distribution — **implemented** (at evaluation, the block fee splits equally among validators who actually attested, pass or fail — the fee pays replay work, not agreement; laziness is deterred by attestation slashing. Division remainder burned; recorded as auditable `FeePayout` entries).
 4. Emissions subsidy — **implemented** (settled blocks on funded domains mint `subsidy_rate x base_block_reward` to the proposer; rate halves every `subsidy_halving_epochs`; per-epoch and lifetime hard caps; zero cap = disabled/pure-bounty; unfunded domains never earn subsidy, so matching structurally requires a bounty).
-5. Adversarial-sim scenarios: wash-mining, pool exhaustion, validator
-   fee/slash equilibrium; recalibrate defaults.
+5. Adversarial-sim scenarios — **implemented** (wash-mining extraction bounded by caps; pool exhaustion/dormancy and fee/slash equilibria covered by simulator scenarios AH–AK and the harness suite).
 6. Genesis auction mechanics (testnet: faucet stands in).

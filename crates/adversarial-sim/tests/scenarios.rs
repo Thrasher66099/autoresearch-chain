@@ -235,3 +235,90 @@ fn degenerate_surface_waste_is_bounded_by_deprecation_mechanism() {
     assert_eq!(with_short, with_long);
     assert!(with_long < 0.1 * without_long);
 }
+
+#[test]
+fn wash_mining_extraction_is_bounded_by_subsidy_caps() {
+    // Economics step 5 (wash-mining): an attacker who funds a domain,
+    // mines it, AND validates it recycles pool spend back to themselves —
+    // the matching ratio alone does not make self-dealing unprofitable.
+    // The binding defenses are the per-epoch and lifetime subsidy caps
+    // (and, on a real network, open validator assignment taking fees).
+    // This test pins that extraction never exceeds the caps.
+    use arc_domain_engine::genesis::SeedValidationRecord;
+    use arc_protocol_types::*;
+    use arc_protocol_rules::validator::ValidatorPool;
+    use arc_simulator::state::SimulatorState;
+
+    let mut sim = SimulatorState::new();
+    sim.reward_config.subsidy_total_cap = 800;
+    sim.reward_config.subsidy_epoch_cap = 300;
+    sim.reward_config.subsidy_rate_bps = 5_000;
+
+    let mut genesis = valid_genesis_block();
+    genesis.reward_pool = TokenAmount::new(10_000);
+    genesis.validation_reserve_bps = 0;
+    genesis.base_block_reward = TokenAmount::new(1_000);
+    let genesis_id = genesis.id;
+    let domain_id = genesis.domain_id;
+    sim.submit_genesis(genesis).unwrap();
+    sim.evaluate_conformance(&genesis_id).unwrap();
+    for i in 1..=3 {
+        sim.record_seed_validation(&genesis_id, SeedValidationRecord {
+            validator: test_validator_id(i),
+            vote: ValidatorVote::Pass,
+            observed_score: Some(MetricValue::new(0.9300)),
+            timestamp: 1_700_000_000 + i as u64,
+        }).unwrap();
+    }
+    sim.finalize_activation(&genesis_id).unwrap();
+    sim.register_validator_pool(ValidatorPool {
+        domain_id,
+        validators: (1..=3).map(test_validator_id).collect(), // all attacker-run
+    });
+
+    // Self-mine 5 blocks through settlement.
+    for n in 1..=5u8 {
+        let mut block = Block {
+            id: test_block_id(100 + n),
+            domain_id,
+            parent_id: genesis_id.as_block_id(),
+            proposer: test_proposer_id(1),
+            child_state_ref: test_artifact_hash(60 + n),
+            diff_ref: test_artifact_hash(160 + n),
+            claimed_metric_delta: MetricValue::new(0.015),
+            evidence_bundle_hash: test_artifact_hash(200 + n),
+            fee: TokenAmount::new(10),
+            bond: TokenAmount::new(500),
+            epoch_id: EpochId(1),
+            status: BlockStatus::Submitted,
+            timestamp: 1_700_001_000 + n as u64,
+        };
+        block.claimed_metric_delta = MetricValue::new(0.015);
+        let block_id = block.id;
+        sim.submit_block(block).unwrap();
+        let assigned = sim.assign_validators(&block_id).unwrap();
+        for v in &assigned {
+            sim.record_attestation(ValidationAttestation {
+                block_id,
+                validator: *v,
+                vote: ValidatorVote::Pass,
+                observed_delta: Some(MetricValue::new(0.015)),
+                replay_evidence_ref: test_artifact_hash(70),
+                timestamp: 1_700_002_000,
+            }).unwrap();
+        }
+        sim.evaluate_block(&block_id).unwrap();
+        sim.close_challenge_window(&block_id).unwrap();
+        for _ in 0..5 {
+            sim.advance_epoch();
+        }
+        sim.settle_block(&block_id).unwrap();
+    }
+
+    // 5 settled blocks x 500 match = 2500 wanted, but the lifetime cap
+    // (800) binds; per-epoch cap (300) binds each settlement epoch.
+    assert_eq!(sim.subsidy_minted_total, 800);
+    assert!(sim.subsidy_payouts.iter().all(|p| p.amount.as_u64() <= 300));
+    // The attacker spent 5000 of their own pool to extract 800 minted.
+    assert_eq!(sim.domain_pool(&domain_id).unwrap().spent, TokenAmount::new(5_000));
+}
