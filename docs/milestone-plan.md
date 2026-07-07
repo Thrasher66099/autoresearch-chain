@@ -327,10 +327,21 @@ B–D.
 
 Deliverables:
 
-- **E1 — Signing and identity:** Ed25519 keypairs; `ParticipantId` derived
-  from public keys; every state-mutating submission (genesis, block,
-  attestation, challenge, adjudication) carries a verified signature.
-  Key generation/management in the node CLI and Python client.
+- **E1 — Signing and identity: COMPLETE (2026-07).** Ed25519 via
+  `crates/identity`: a participant's ID **is** their public key, so
+  verification is self-contained. Signatures are computed over
+  deterministic domain-separated message strings (versioned type tag +
+  `|`-joined fields; floats as f64-bit hex) — never over serialized JSON,
+  whose float formatting differs across languages. Actor-bearing
+  submissions (genesis, block, attestation, seed validation, challenge)
+  carry a sibling `signature` field verified at the node boundary;
+  enforcement is opt-in per state (`arc-node init --require-signatures`,
+  intended ON for any testnet genesis) and any signature present is
+  verified even in legacy mode. `arc-node keygen` generates keypairs;
+  `arc_runner.identity` mirrors the message builders (pinned
+  cross-language test vectors + a Python-signs/Rust-verifies integration
+  test). Remaining for later: signing adjudication/registration commands
+  (no actor field yet) and key management beyond flat files.
 - **E2 — Ordering layer:** the useful-work game does not order the chain; a
   deliberately boring mechanism does. Start with the simplest thing that is
   honest about its trust model (a small permissioned validator set / PoA

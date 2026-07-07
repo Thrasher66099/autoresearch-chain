@@ -172,6 +172,7 @@ Phase 0 is substantially complete. The Rust workspace contains 10 crates (~10,60
 | `storage-model` | Partial | Content-addressed artifact store (BLAKE3), ArtifactStore trait, InMemoryArtifactStore, evidence bundling, file-from-disk ingestion; Python-Rust hash agreement verified; materialization triggers and frontier assembly not yet implemented |
 | `node` | Partial | Phase 1 target; file-based state persistence, CLI transaction submission (18 write commands, including challenge adjudication and expiry), and state queries (5 read commands) implemented; event log / state-transition trace not yet implemented |
 | `adversarial-sim` | Implemented | Phase 4 harness: strategy-parameterized actors over the simulator, deterministic episodes, per-strategy EV accounting, calibration sweep binary; results in `simulations/calibration-report.md` |
+| `identity` | Implemented | Ed25519 identity (Milestone E1): participant ID = public key, deterministic cross-language signing messages, sign/verify, keygen; enforced at the node boundary via `init --require-signatures` |
 | `cli` | Stub | Phase 1 target |
 
 ### Protocol-truth hardening
