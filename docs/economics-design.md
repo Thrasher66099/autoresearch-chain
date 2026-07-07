@@ -130,7 +130,7 @@ default for unfunded test states only.
    arithmetic dormancy gate at submission, permissionless
    `top-up-pool`; unfunded domains keep legacy global-config behavior).
 2. Bond-at-submission + attestation slashing — **implemented** (bond escrow committed in `submit_block`, released on rejection — slashing requires adjudication, never a vote tally; validators post registration bonds when `validator_bond > 0`, slashed by upheld attestation challenges with the standard challenger payout split, leaving the block itself governed by its own challenges).
-3. Proposer-fee distribution to assigned validators.
+3. Proposer-fee distribution — **implemented** (at evaluation, the block fee splits equally among validators who actually attested, pass or fail — the fee pays replay work, not agreement; laziness is deterred by attestation slashing. Division remainder burned; recorded as auditable `FeePayout` entries).
 4. Emissions subsidy accounting with matching + caps.
 5. Adversarial-sim scenarios: wash-mining, pool exhaustion, validator
    fee/slash equilibrium; recalibrate defaults.

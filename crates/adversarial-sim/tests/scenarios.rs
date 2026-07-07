@@ -195,7 +195,10 @@ fn validator_compensation_gap_is_real() {
     let mut w_paid = recommended_world();
     w_paid.validator_fee = w_paid.replay_cost;
     let r = run_episode(&w_paid, &standard_actors(0.3));
-    assert!((r.validator_ev["HonestReplay"] - 0.0).abs() < 1e-6);
+    // Real proposer-fee shares (economics step 3) now supplement the
+    // hypothetical fee: at fee == replay_cost, honest validation is at
+    // or above break-even.
+    assert!(r.validator_ev["HonestReplay"] >= 0.0);
     assert!(
         r.validator_ev["RubberStamp"] > r.validator_ev["HonestReplay"],
         "fees alone reward laziness at least as much as honesty"

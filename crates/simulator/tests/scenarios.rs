@@ -2396,3 +2396,67 @@ fn scenario_ai_validator_bonds_and_attestation_slashing() {
         .iter()
         .all(|e| e.status != EscrowStatus::Slashed));
 }
+
+// =======================================================================
+// Scenario AJ: proposer-fee distribution (economics step 3)
+// =======================================================================
+
+#[test]
+fn scenario_aj_fee_split_among_attesting_validators() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Block with fee 10, three assigned validators all attesting.
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    // Fee 10 / 3 attesters = 3 each; remainder 1 burned.
+    let payouts: Vec<_> = sim
+        .fee_payouts
+        .iter()
+        .filter(|f| f.block_id == block_id)
+        .collect();
+    assert_eq!(payouts.len(), 3);
+    assert!(payouts.iter().all(|f| f.amount == TokenAmount::new(3)));
+
+    // Each payee actually attested.
+    let attesters: Vec<_> = sim.attestations[&block_id]
+        .iter()
+        .map(|a| a.validator)
+        .collect();
+    assert!(payouts.iter().all(|f| attesters.contains(&f.validator)));
+}
+
+#[test]
+fn scenario_aj_rejected_block_still_pays_validation_work() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // All validators vote Fail: block rejected, but replay work is paid.
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    sim.submit_block(block).unwrap();
+    let assigned = sim.assign_validators(&block_id).unwrap();
+    for v in &assigned {
+        sim.record_attestation(ValidationAttestation {
+            block_id,
+            validator: *v,
+            vote: ValidatorVote::Fail,
+            observed_delta: None,
+            replay_evidence_ref: test_artifact_hash(70),
+            timestamp: 1700002000,
+        })
+        .unwrap();
+    }
+    let outcome = sim.evaluate_block(&block_id).unwrap();
+    assert_eq!(outcome, ProvisionalOutcome::Rejected);
+
+    let payouts: Vec<_> = sim
+        .fee_payouts
+        .iter()
+        .filter(|f| f.block_id == block_id)
+        .collect();
+    assert_eq!(payouts.len(), 3);
+    // And the proposer's bond came back (bond-at-submission semantics).
+    let bond = sim.block_escrow(&block_id).unwrap();
+    assert_eq!(bond.status, EscrowStatus::Released);
+}

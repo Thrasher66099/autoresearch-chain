@@ -80,6 +80,22 @@ pub struct EscrowRecord {
     pub release_epoch: EpochId,
 }
 
+/// Auditable record of a proposer-fee share paid to an attesting
+/// validator (economics step 3). The proposer's fee is split equally
+/// among the assigned validators that actually attested; any division
+/// remainder is burned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeePayout {
+    /// The block whose fee is being distributed.
+    pub block_id: BlockId,
+    /// The validator receiving the share.
+    pub validator: crate::ids::ValidatorId,
+    /// Amount paid.
+    pub amount: TokenAmount,
+    /// Epoch of distribution.
+    pub epoch: EpochId,
+}
+
 /// Auditable record of how slashed funds were distributed after an
 /// upheld challenge.
 ///
