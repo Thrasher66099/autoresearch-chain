@@ -84,6 +84,15 @@ class EvidenceBundle:
         """Check that all hashes are non-empty 64-char hex strings."""
         return all(len(h) == 64 for h in self.all_hashes())
 
+    def to_manifest_bytes(self) -> bytes:
+        """Serialize the bundle as canonical JSON bytes for storage.
+
+        The manifest is deterministic (``sort_keys=True``) so the same
+        bundle always produces the same hash.
+        """
+        import json
+        return json.dumps(self.as_dict(), sort_keys=True).encode("utf-8")
+
 
 class EvidenceBundler:
     """Creates evidence bundles by hashing and storing artifacts.

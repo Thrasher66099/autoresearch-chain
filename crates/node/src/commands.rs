@@ -76,6 +76,10 @@ fn parse_genesis_block_id(hex: &str) -> Result<GenesisBlockId, String> {
     Ok(GenesisBlockId::from_bytes(parse_hex_bytes(hex)?))
 }
 
+fn parse_challenge_id(hex: &str) -> Result<ChallengeId, String> {
+    Ok(ChallengeId::from_bytes(parse_hex_bytes(hex)?))
+}
+
 /// Load state, apply a mutation, save state, and return a JSON result.
 fn load_mutate_save<F, R>(state_path: &Path, action: F) -> Result<R, String>
 where
@@ -517,6 +521,96 @@ pub fn cmd_advance_epoch(state_path: &Path) {
     match load_mutate_save(state_path, |sim| {
         sim.advance_epoch();
         Ok(serde_json::json!({ "epoch": sim.current_epoch }))
+    }) {
+        Ok(result) => print_json(&result),
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `begin-review <challenge-id>`
+pub fn cmd_begin_challenge_review(state_path: &Path, args: &[String]) {
+    let hex = args.first().unwrap_or_else(|| {
+        eprintln!("error: begin-review requires a challenge ID (hex)");
+        std::process::exit(1);
+    });
+
+    let challenge_id = match parse_challenge_id(hex) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match load_mutate_save(state_path, |sim| {
+        sim.begin_challenge_review(&challenge_id)?;
+        Ok(serde_json::json!({
+            "status": "challenge_under_review",
+            "challenge_id": challenge_id,
+        }))
+    }) {
+        Ok(result) => print_json(&result),
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `uphold-challenge <challenge-id>`
+pub fn cmd_uphold_challenge(state_path: &Path, args: &[String]) {
+    let hex = args.first().unwrap_or_else(|| {
+        eprintln!("error: uphold-challenge requires a challenge ID (hex)");
+        std::process::exit(1);
+    });
+
+    let challenge_id = match parse_challenge_id(hex) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match load_mutate_save(state_path, |sim| {
+        sim.uphold_challenge(&challenge_id)?;
+        Ok(serde_json::json!({
+            "status": "challenge_upheld",
+            "challenge_id": challenge_id,
+        }))
+    }) {
+        Ok(result) => print_json(&result),
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `reject-challenge <challenge-id>`
+pub fn cmd_reject_challenge(state_path: &Path, args: &[String]) {
+    let hex = args.first().unwrap_or_else(|| {
+        eprintln!("error: reject-challenge requires a challenge ID (hex)");
+        std::process::exit(1);
+    });
+
+    let challenge_id = match parse_challenge_id(hex) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match load_mutate_save(state_path, |sim| {
+        sim.reject_challenge(&challenge_id)?;
+        Ok(serde_json::json!({
+            "status": "challenge_rejected",
+            "challenge_id": challenge_id,
+        }))
     }) {
         Ok(result) => print_json(&result),
         Err(e) => {

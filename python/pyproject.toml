@@ -11,6 +11,7 @@ license = {text = "AGPL-3.0-or-later"}
 readme = "README.md"
 dependencies = [
     "blake3>=1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

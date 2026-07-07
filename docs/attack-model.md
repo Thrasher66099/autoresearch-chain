@@ -354,6 +354,37 @@ Narrative drift is always possible in ambitious projects.
 
 ---
 
+## 18. Degenerate Evaluation Surface
+
+### Attack
+A domain creator designs a reward function with a hidden exploit — a degenerate input class that scores artificially high — or constructs an evaluation surface where high scores are achievable through shortcut strategies (memorization, pattern matching, trivial reformulations) rather than genuine research improvement. The domain passes conformance checks and seed validation, but the metric does not track useful progress.
+
+A variant: the creator colludes with a proposer who knows the exploit, allowing them to claim rewards that honest proposers cannot match.
+
+### Failure mode
+The protocol pays for metric improvement that does not correspond to real research value. Honest proposers waste compute on a domain where the game is rigged. The canonical frontier state is technically "best" by the metric but scientifically worthless.
+
+### Mitigations
+- seed bond makes frivolous or malicious domain creation expensive
+- seed validation provides early scrutiny of the evaluation surface by independent validators
+- challenge games allow anyone to contest blocks or domain integrity
+- fork-native competition allows clean competing domains to absorb participants
+- permissionless genesis keeps the cost of launching a replacement domain low
+
+### Open risk
+The current protocol has no explicit mechanism for community-driven domain deprecation or flagging. A domain with a degenerate evaluation surface that passes conformance and seed validation can persist indefinitely, consuming validator attention and misleading participants.
+
+**This is an unspecified mechanism.** A domain health or deprecation mechanism should exist but does not yet have a complete design. Candidates under consideration include:
+
+- validator-initiated domain review (quorum of validators can flag a domain for re-evaluation)
+- stake-weighted deprecation signals (participants signal low confidence, triggering review)
+- automatic deprecation based on participation decay (domains with sustained low proposer/validator activity lose priority)
+- challenge-based domain invalidation (a bonded challenge targeting the evaluation surface itself, not just individual blocks)
+
+The design must avoid introducing discretionary truth selection — deprecation should be based on legible, auditable criteria, not subjective quality judgments. This is a hard constraint given the project's core invariant.
+
+---
+
 ## Closing View
 
 The project is built on the assumption that attacks are not anomalies. They are the normal condition of any reward-bearing system.

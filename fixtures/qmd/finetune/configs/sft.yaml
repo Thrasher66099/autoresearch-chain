@@ -1,0 +1,12 @@
+# Baseline SFT configuration for QMD query expansion.
+# Deliberately low-scoring: no think tags, no diversity terms,
+# minimal template. Seed score ~0.38.
+model_name: Qwen3-1.7B
+lora_rank: 16
+epochs: 5
+learning_rate: 2e-5
+batch_size: 4
+use_think_tags: false
+diversity_terms: []
+template: minimal
+min_length: 0
