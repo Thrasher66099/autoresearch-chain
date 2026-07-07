@@ -182,6 +182,7 @@ The Phase 0 implementation established several protocol-truth invariants that we
 - `DerivedValidity` serves as a centralized truth surface for all downstream logic (`DirectValid`, `DirectInvalid`, `AncestryInvalid`).
 - Escrow release is gated on both epoch timing and branch validity.
 - Truth-bearing attestation semantics: a Pass vote without `observed_delta` does not count toward acceptance.
+- Frontier selection and dominance evaluation compare **cumulative validated improvement from the domain seed**, not per-block deltas. Per-block deltas are relative to each block's own parent and are therefore incomparable across generations — the original implementation compared them directly, which prevented any child from displacing a parent with a larger delta (found by the first two-generation materialized-frontier run; fixed via `cumulative_validated_delta`).
 
 ---
 
@@ -307,7 +308,7 @@ Connect real useful-work loops to the protocol.
 - challenger runner — **done** (finds suspect blocks, fetches evidence, opens bonded challenges; adjudication via `arc-node` begin-review/uphold-challenge/reject-challenge)
 - evidence bundle packager — **done** (BLAKE3 content-addressed hashing, Python-Rust hash agreement verified, JSON manifest storage for proposer→validator handoff)
 - domain experiment wrappers — **partial** (QMD query-expansion genesis packager implemented, protocol bridge function `prepare_genesis` adds identity fields)
-- canonical frontier pull helper — **partial** (genesis-based workspace extraction implemented; diff-chain materialization deferred)
+- canonical frontier pull helper — **done** (verified materialization of any state reference — genesis seed or block `child_state_ref` — with diff-chain resolution as the fallback path)
 - autoresearch-style adapter — **done** (frozen/search surface enforcement, frontier pull, experiment result capture with evidence bundling)
 
 The Python side should support:
@@ -334,7 +335,7 @@ This is the first point at which the protocol and useful-work layer truly connec
 
 ## Phase 3 — Artifact Layer and Frontier Materialization
 
-**Status:** Partially started. The type-level foundation exists (`MaterializedState`, `CanonicalFrontierState`, `CodebaseStateRef`, `MaterializationPolicyKind`). The `storage-model` crate now implements content-addressed artifact storage (BLAKE3 hashing, `ArtifactStore` trait, `InMemoryArtifactStore`, `ArtifactKind` classification, `ArtifactMetadata`). Materialization triggers, frontier assembly, and data availability checking remain future work.
+**Status:** Substantially complete on the Python side. Materialized states are content-addressed manifest snapshots (`arc_runner/materialize`): every codebase file is stored individually and the manifest (sorted path → BLAKE3 hash) hashes to the state reference (`child_state_ref`, `seed_codebase_state_ref`). Block diffs are structured state diffs (changed/deleted file maps referencing the parent state) rather than textual patches — application is deterministic and each step verifies against the declared child state. Materialization is verified assembly: a workspace that does not hash back to its reference raises a protocol violation. Diff-chain resolution from the genesis seed to a frontier tip is implemented and exercised by a two-generation QMD flow (demo phases 9–11) in which generation 2 builds on generation 1's verified materialized state with frozen surfaces intact. The type-level foundation exists in Rust (`MaterializedState`, `CanonicalFrontierState`, `CodebaseStateRef`, `MaterializationPolicyKind`), and `storage-model` implements content-addressed artifact storage; Rust-side materialization trigger evaluation and data-availability checking remain future work.
 
 ### Goal
 
@@ -584,7 +585,7 @@ The protocol needs a clean model for how it references:
 
 This should be explicit and stable early.
 
-`ArtifactHash` is defined as the type-level reference primitive. Content-addressed hashing uses BLAKE3 (32-byte output mapping directly to `ArtifactHash`). The hash is determined solely by content bytes — artifact kind is metadata, not identity. The `ArtifactStore` trait defines storage/retrieval, and `InMemoryArtifactStore` provides the in-memory implementation. The Python evidence layer uses the same BLAKE3 algorithm, and hash agreement between Rust and Python is verified by tests. Resolution of references into pullable assembled states (frontier materialization) is not yet implemented.
+`ArtifactHash` is defined as the type-level reference primitive. Content-addressed hashing uses BLAKE3 (32-byte output mapping directly to `ArtifactHash`). The hash is determined solely by content bytes — artifact kind is metadata, not identity. The `ArtifactStore` trait defines storage/retrieval, and `InMemoryArtifactStore` provides the in-memory implementation. The Python evidence layer uses the same BLAKE3 algorithm, and hash agreement between Rust and Python is verified by tests. Resolution of references into pullable assembled states (frontier materialization) is implemented in the Python layer (`arc_runner/materialize`): state manifests and structured diffs resolve to verified workspaces.
 
 ### Reproducibility Tolerance Model — Partially locked
 
@@ -714,7 +715,7 @@ They are reasons to build in a way that allows change.
 1. Complete Phase 0 remaining items: storage-model references, successor-track creation, cross-domain effects. (Challenge bond economics and provisional/survival staged rewards are implemented; later reward stages remain.)
 2. Complete local single-node runtime (Phase 1): transaction flow, state queries, CLI commands (persistence already implemented).
 3. Complete Python runner integration (Phase 2): connect challenger runner to local runtime; proposer and validator runners are connected with evidence manifest storage (evidence bundling, QMD genesis packaging, surface enforcement, and end-to-end pipeline tested).
-4. Implement frontier materialization and artifact resolution (Phase 3).
+4. Implement frontier materialization and artifact resolution (Phase 3) — done on the Python side (verified state manifests, structured diffs, diff-chain resolution); Rust-side trigger evaluation and data-availability checking remain.
 5. Run sustained adversarial simulations (Phase 4, can overlap with Phase 2/3).
 
 ---

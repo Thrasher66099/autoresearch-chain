@@ -33,6 +33,28 @@ import tempfile
 from pathlib import Path
 
 from arc_runner.evidence import EvidenceBundler, blake3_file
+from arc_runner.materialize import (
+    MaterializationError,
+    compute_state_diff,
+    load_state_manifest,
+    materialize_state,
+    snapshot_workspace,
+)
+
+
+def _codebase_root(workspace: str | Path) -> Path:
+    """Locate the codebase root inside a pulled workspace.
+
+    Materialized workspaces contain a single top-level directory (the
+    manifest's ``root_dir``). If the workspace itself holds files directly,
+    it is its own root.
+    """
+    workspace = Path(workspace)
+    entries = [p for p in workspace.iterdir() if p.name != "_arc_diff.patch"]
+    dirs = [p for p in entries if p.is_dir()]
+    if len(dirs) == 1 and all(p.is_dir() for p in entries):
+        return dirs[0]
+    return workspace
 
 
 class AutoresearchAdapter:
@@ -53,26 +75,39 @@ class AutoresearchAdapter:
         self.store_dir = Path(store_dir)
         self.bundler = EvidenceBundler(self.store_dir)
 
-    def pull_frontier(self) -> str:
-        """Pull the current canonical codebase into a working directory.
+    def pull_frontier(self, state_ref: str | None = None) -> str:
+        """Pull an assembled codebase state into a working directory.
 
-        For now, extracts the genesis seed codebase from the artifact store
-        into a temporary directory. In later phases this will pull the actual
-        frontier state from the Rust protocol node.
+        Parameters
+        ----------
+        state_ref : str, optional
+            Content-addressed state reference to materialize — typically a
+            frontier block's ``child_state_ref``. Defaults to the genesis
+            ``seed_codebase_state_ref``.
+
+        The state is materialized through ``arc_runner.materialize`` and
+        verified against its reference (a workspace that does not hash
+        back to ``state_ref`` raises ``MaterializationError``). Legacy
+        gzip-tarball seed artifacts are still extractable but are not
+        verifiable.
 
         Returns the path to the working directory.
         """
-        seed_hash = self.config["seed_codebase_state_ref"]
-        seed_bytes = self.bundler.fetch(seed_hash)
-        if seed_bytes is None:
+        ref = state_ref or self.config["seed_codebase_state_ref"]
+        artifact = self.bundler.fetch(ref)
+        if artifact is None:
             raise FileNotFoundError(
-                f"Seed codebase artifact not found in store: {seed_hash}"
+                f"Codebase state artifact not found in store: {ref}"
             )
 
         workspace = tempfile.mkdtemp(prefix="arc_workspace_")
 
-        with tarfile.open(fileobj=io.BytesIO(seed_bytes), mode="r:gz") as tar:
-            tar.extractall(path=workspace)
+        if artifact[:2] == b"\x1f\x8b":
+            # Legacy gzip tarball (pre-materialization genesis packages).
+            with tarfile.open(fileobj=io.BytesIO(artifact), mode="r:gz") as tar:
+                tar.extractall(path=workspace)
+        else:
+            materialize_state(ref, self.bundler, workspace)
 
         return workspace
 
@@ -113,6 +148,7 @@ class AutoresearchAdapter:
         self,
         workspace: str,
         baseline_score: float,
+        parent_state_ref: str | None = None,
     ) -> dict:
         """After an experiment, capture the diff, logs, metrics, and package as evidence.
 
@@ -122,12 +158,20 @@ class AutoresearchAdapter:
             Path to the working directory containing modified code.
         baseline_score : float
             The score to compare against (from genesis seed_score or frontier).
+        parent_state_ref : str, optional
+            State reference of the parent codebase state this experiment
+            started from. Defaults to the genesis
+            ``seed_codebase_state_ref``.
 
         Returns a dict with:
             - ``diff_path``: path to the generated diff file
             - ``score``: the observed metric score
             - ``delta``: score - baseline_score
             - ``evidence_bundle``: EvidenceBundle if evidence files exist
+            - ``child_state_ref``: content-addressed state manifest of the
+              post-experiment codebase (verifiable materialized state)
+            - ``diff_ref``: structured state diff from the parent state to
+              the child state
         """
         workspace_path = Path(workspace)
         result: dict = {
@@ -181,6 +225,30 @@ class AutoresearchAdapter:
             result["evidence_bundle"] = bundle
         else:
             result["evidence_bundle"] = None
+
+        # Snapshot the post-experiment codebase as a verifiable
+        # materialized state and record the structured diff from the
+        # parent state. These become the block's child_state_ref and
+        # diff_ref. The snapshot's root_dir is taken from the parent
+        # manifest so state hashing is layout-stable across machines;
+        # legacy (tarball) parents cannot be diffed against, so diff_ref
+        # is omitted for them.
+        parent_ref = parent_state_ref or self.config["seed_codebase_state_ref"]
+        result["parent_state_ref"] = parent_ref
+        try:
+            parent_manifest = load_state_manifest(parent_ref, self.bundler)
+        except (FileNotFoundError, MaterializationError, ValueError):
+            parent_manifest = None
+
+        root_dir_name = parent_manifest["root_dir"] if parent_manifest else None
+        child_state_ref = snapshot_workspace(
+            _codebase_root(workspace), self.bundler, root_dir_name=root_dir_name
+        )
+        result["child_state_ref"] = child_state_ref
+        if parent_manifest is not None:
+            result["diff_ref"] = compute_state_diff(
+                parent_ref, child_state_ref, self.bundler
+            )
 
         return result
 

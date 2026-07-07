@@ -18,7 +18,8 @@
 """
 AutoResearch Chain -- QMD Domain Demo.
 
-Demonstrates the full protocol lifecycle with real computation:
+Demonstrates the full protocol lifecycle with real computation across
+two generations of improvement:
   1. Initialize protocol state
   2. Package QMD genesis with real seed scoring
   3. Activate domain
@@ -27,6 +28,9 @@ Demonstrates the full protocol lifecycle with real computation:
   6. Validate by independent replay
   7. Evaluate and accept block
   8. Settle and finalize
+  9. Pull the frontier block's verified materialized state
+  10. Agent edit + second-generation training on that state
+  11. Submit, validate, and accept generation 2; resolve the diff chain
 
 Usage::
 
@@ -51,12 +55,15 @@ from arc_runner.client import ArcNodeClient
 from arc_runner.domains import prepare_genesis
 from arc_runner.domains.qmd_experiment import (
     BASELINE_CONFIG,
+    extend_diversity_vocabulary,
+    persist_best_config,
     replay_and_verify,
     run_evaluation,
     run_training,
 )
 from arc_runner.domains.qmd_query_expansion import QMDGenesisPackager
 from arc_runner.evidence import EvidenceBundler
+from arc_runner.materialize import resolve_diff_chain
 from arc_runner.proposer import ProposerConfig, ProposerRunner
 from arc_runner.validator import ValidatorConfig, ValidatorRunner
 
@@ -106,6 +113,55 @@ def _find_fixtures() -> Path:
 
 def _print_phase(n: int, title: str) -> None:
     print(f"\n--- Phase {n}: {title} ---")
+
+
+def _validate_block(
+    client: ArcNodeClient,
+    arc_node_bin: str,
+    state_path: str,
+    store_dir: Path,
+    domain_id: str,
+    block_id: str,
+    workspace: str,
+    claimed_score: float,
+    delta: float,
+) -> None:
+    """Each assigned validator independently replays and attests."""
+    assign_result = client.assign_validators(block_id)
+    assigned = assign_result["assigned_validators"]
+
+    block_detail = client.show_block(block_id)
+    bundler = EvidenceBundler(store_dir)
+
+    for idx, validator_hex in enumerate(assigned, 1):
+        validator = ValidatorRunner(ValidatorConfig(
+            node_binary=arc_node_bin,
+            state_path=state_path,
+            store_dir=str(store_dir),
+            domain_id=domain_id,
+            validator_id=validator_hex,
+        ))
+
+        evidence_info = validator.fetch_evidence(block_detail)
+        assert evidence_info is not None and evidence_info["available"]
+
+        replay_result = replay_and_verify(
+            workspace=workspace,
+            evidence_manifest=evidence_info["manifest"],
+            bundler=bundler,
+            claimed_score=claimed_score,
+        )
+
+        replay_ref = bundler.hash_bytes(
+            json.dumps(replay_result, sort_keys=True).encode("utf-8")
+        )
+        validator.submit_attestation(
+            block_id, replay_result["vote"], delta, replay_ref
+        )
+
+        obs = replay_result["observed_score"]
+        vote = replay_result["vote"]
+        print(f"  Validator {idx}: replayed -> {obs:.3f} -> {vote.upper()}")
 
 
 def run_demo() -> None:
@@ -186,19 +242,24 @@ def _run_lifecycle(
     domain_id = genesis["domain_id"]
     genesis_id = genesis["id"]
 
-    # --- Phase 4: Run experiment ---
-    _print_phase(4, "Run experiment")
+    # --- Phase 4: Run experiment (generation 1) ---
+    _print_phase(4, "Run experiment (generation 1)")
     adapter = AutoresearchAdapter(raw_genesis, store_dir)
     workspace = adapter.pull_frontier()
+    workspace2 = None
 
     try:
         adapter.enforce_surfaces(workspace)
 
-        print(f"  Running heuristic training (36 trials)...")
+        print("  Running heuristic training (36 trials)...")
         training_result = run_training(workspace)
         best_score = training_result["best_score"]
         delta = best_score - seed_score
         print(f"  Best score: {best_score:.3f} (delta: +{delta:.3f})")
+
+        # Commit the winning config into the codebase (search surface) so
+        # the improvement is part of the block's materialized state.
+        persist_best_config(workspace, training_result["best_config"])
 
         experiment_result = adapter.capture_result(workspace, seed_score)
         assert adapter.should_submit(experiment_result), "Experiment did not improve on baseline"
@@ -226,45 +287,11 @@ def _run_lifecycle(
 
         # --- Phase 6: Validate by replay ---
         _print_phase(6, "Validate by replay")
-        assign_result = client.assign_validators(block_id)
-        assigned = assign_result["assigned_validators"]
-
-        block_detail = client.show_block(block_id)
-        bundler = EvidenceBundler(store_dir)
-
-        for idx, validator_hex in enumerate(assigned, 1):
-            validator_config = ValidatorConfig(
-                node_binary=arc_node_bin,
-                state_path=state_path,
-                store_dir=str(store_dir),
-                domain_id=domain_id,
-                validator_id=validator_hex,
-            )
-            validator = ValidatorRunner(validator_config)
-
-            evidence_info = validator.fetch_evidence(block_detail)
-            assert evidence_info is not None and evidence_info["available"]
-
-            replay_result = replay_and_verify(
-                workspace=workspace,
-                evidence_manifest=evidence_info["manifest"],
-                bundler=bundler,
-                claimed_score=experiment_result["score"],
-            )
-
-            replay_ref = bundler.hash_bytes(
-                json.dumps(replay_result, sort_keys=True).encode("utf-8")
-            )
-            validator.submit_attestation(
-                block_id,
-                replay_result["vote"],
-                experiment_result["delta"],
-                replay_ref,
-            )
-
-            obs = replay_result["observed_score"]
-            vote = replay_result["vote"]
-            print(f"  Validator {idx}: replayed -> {obs:.3f} -> {vote.upper()}")
+        _validate_block(
+            client, arc_node_bin, state_path, store_dir, domain_id,
+            block_id, workspace, experiment_result["score"],
+            experiment_result["delta"],
+        )
 
         # --- Phase 7: Evaluate block ---
         _print_phase(7, "Evaluate block")
@@ -281,12 +308,74 @@ def _run_lifecycle(
         client.finalize_block(block_id)
         print("  Block settled and finalized")
 
+        # --- Phase 9: Pull materialized frontier state ---
+        _print_phase(9, "Pull materialized frontier state")
+        block1 = client.show_block(block_id)["block"]
+        gen1_state_ref = block1["child_state_ref"]
+        workspace2 = adapter.pull_frontier(state_ref=gen1_state_ref)
+        adapter.enforce_surfaces(workspace2)
+        print(f"  Materialized state {gen1_state_ref[:16]}... verified")
+        print("  Frozen surfaces intact; generation-1 config present")
+
+        # --- Phase 10: Second-generation experiment ---
+        _print_phase(10, "Second-generation experiment")
+        # Agent edit on the search surface: extend the diversity
+        # vocabulary the strategy search can draw from.
+        extend_diversity_vocabulary(workspace2)
+        print("  Agent edited train.py (extended diversity vocabulary)")
+
+        training_result2 = run_training(workspace2)
+        best_score2 = training_result2["best_score"]
+        delta2 = best_score2 - best_score
+        print(f"  Best score: {best_score2:.3f} (delta: +{delta2:.3f})")
+        assert best_score2 > best_score, "Generation 2 did not improve"
+
+        persist_best_config(workspace2, training_result2["best_config"])
+        experiment_result2 = adapter.capture_result(
+            workspace2, best_score, parent_state_ref=gen1_state_ref
+        )
+        assert adapter.should_submit(experiment_result2)
+
+        # --- Phase 11: Submit and validate generation 2 ---
+        _print_phase(11, "Submit and validate generation 2")
+        parent_id = proposer.get_frontier_parent()
+        assert parent_id == block_id, "Frontier should be the generation-1 block"
+        result = proposer.submit_block(parent_id, experiment_result2)
+        block2_id = result["block_id"]
+        _validate_block(
+            client, arc_node_bin, state_path, store_dir, domain_id,
+            block2_id, workspace2, experiment_result2["score"],
+            experiment_result2["delta"],
+        )
+        result = client.evaluate_block(block2_id)
+        print(f"  Outcome: {result['outcome']}")
+
+        frontier = client.show_frontier(domain_id)["canonical_frontier"]
+        assert frontier == block2_id, "Frontier should advance to generation 2"
+
+        # The chain is a versioned substrate: the diff chain resolves from
+        # the genesis seed to the tip state.
+        block2 = client.show_block(block2_id)["block"]
+        bundler = EvidenceBundler(store_dir)
+        resolved = resolve_diff_chain(
+            [block1["diff_ref"], block2["diff_ref"]],
+            raw_genesis["seed_codebase_state_ref"],
+            bundler,
+        )
+        assert resolved == block2["child_state_ref"]
+        print("  Frontier advanced to generation 2")
+        print("  Diff chain seed -> gen1 -> gen2 resolves and verifies")
+
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
+        if workspace2 is not None:
+            shutil.rmtree(workspace2, ignore_errors=True)
 
     # --- Summary ---
-    pct = (best_score - seed_score) / seed_score * 100
-    print(f"\nCOMPLETE: Seed {seed_score:.3f} -> Final {best_score:.3f} (+{pct:.1f}%)")
+    pct1 = (best_score - seed_score) / seed_score * 100
+    pct2 = (best_score2 - seed_score) / seed_score * 100
+    print(f"\nCOMPLETE: Seed {seed_score:.3f} -> Gen1 {best_score:.3f} (+{pct1:.1f}%)"
+          f" -> Gen2 {best_score2:.3f} (+{pct2:.1f}%)")
     print("-" * 48)
 
 

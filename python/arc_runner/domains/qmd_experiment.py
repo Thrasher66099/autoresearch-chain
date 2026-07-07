@@ -36,7 +36,6 @@ from pathlib import Path
 
 from arc_runner.evidence import EvidenceBundler
 
-
 # Baseline config matching configs/sft.yaml defaults.
 BASELINE_CONFIG: dict = {
     "use_think_tags": False,
@@ -140,6 +139,75 @@ def run_training(workspace: str | Path) -> dict:
     root = find_codebase_root(workspace)
     train_module = _load_module("train", root / "train.py")
     return train_module.train(str(root), str(workspace))
+
+
+def persist_best_config(workspace: str | Path, best_config: dict) -> Path:
+    """Write a generation's winning config into the codebase search surface.
+
+    Training outputs (config.yaml, metrics.json) land in the workspace
+    root, outside the codebase — they are evidence, not state. For the
+    improvement to be part of the block's materialized child state (and
+    thus pullable by the next generation), the winning config must be
+    committed into the codebase itself. ``configs/`` is on the QMD search
+    surface, so this is a legitimate proposer edit.
+
+    Returns the path of the written config file.
+    """
+    root = find_codebase_root(workspace)
+    dest = root / "configs" / "best_config.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        json.dumps(best_config, indent=2, sort_keys=True) + "\n"
+    )
+    return dest
+
+
+# The diversity vocabulary shipped in the seed train.py, and an extended
+# replacement. The frozen reward caps diversity at 30 unique terms; the
+# seed vocabulary is too small to saturate the cap, so extending it is a
+# genuine, replayable recipe improvement.
+_SEED_VOCAB = (
+    '        [\n'
+    '            "reference", "exploration", "insight", "perspective",\n'
+    '            "documentation", "framework", "interpretation", "summary",\n'
+    '            "synthesis", "evaluation",\n'
+    '        ],\n'
+)
+_EXTENDED_VOCAB = (
+    '        [\n'
+    '            "reference", "exploration", "insight", "perspective",\n'
+    '            "documentation", "framework", "interpretation", "summary",\n'
+    '            "synthesis", "evaluation", "taxonomy", "methodology",\n'
+    '            "provenance", "benchmark", "heuristic", "ontology",\n'
+    '            "paradigm", "corpus", "lexicon", "semantics",\n'
+    '            "inference", "abstraction", "granularity", "topology",\n'
+    '            "citation", "archive", "glossary", "compendium",\n'
+    '            "monograph", "treatise",\n'
+    '        ],\n'
+)
+
+
+def extend_diversity_vocabulary(workspace: str | Path) -> Path:
+    """Scripted stand-in for an agent edit on the search surface.
+
+    Edits ``train.py`` (search surface) to extend the diversity vocabulary
+    the strategy search can draw from. Models what an autoresearch agent
+    does in generation 2: modify the recipe based on the pulled frontier
+    state. Raises ``ValueError`` if the expected seed vocabulary is not
+    present (workspace not at the expected generation).
+
+    Returns the path of the edited file.
+    """
+    root = find_codebase_root(workspace)
+    train_py = root / "train.py"
+    source = train_py.read_text()
+    if _SEED_VOCAB not in source:
+        raise ValueError(
+            "train.py does not contain the seed diversity vocabulary; "
+            "cannot apply the generation-2 edit"
+        )
+    train_py.write_text(source.replace(_SEED_VOCAB, _EXTENDED_VOCAB))
+    return train_py
 
 
 def replay_and_verify(

@@ -494,6 +494,17 @@ impl SimulatorState {
             })
             .unwrap_or_default();
 
+        // Cumulative validated improvement from the seed — the comparable
+        // frontier metric (computed before the fork-state borrow).
+        let cumulative_metric =
+            self.cumulative_validated_delta(&block.id).ok_or_else(|| {
+                format!(
+                    "block {} accepted but cumulative validated delta \
+                     unavailable (ancestor missing validated outcome)",
+                    block.id
+                )
+            })?;
+
         if let Some(fork_state) = self.fork_states.get_mut(&domain_id) {
             let counter = &mut self.fork_family_counter;
             fork_state
@@ -518,9 +529,13 @@ impl SimulatorState {
                 })
                 .map(|d| *d == MetricDirection::HigherBetter)?;
 
+            // Frontier selection compares cumulative validated improvement
+            // from the seed, not the block's own delta — a child's delta is
+            // relative to its parent, so raw deltas are incomparable across
+            // generations.
             fork_state.maybe_update_frontier(
                 block.id,
-                validated_metric,
+                cumulative_metric,
                 higher_is_better,
             );
         }
@@ -944,8 +959,38 @@ impl SimulatorState {
                     })
                     .unwrap_or(false)
             })
-            .map(|(bid, outcome)| (*bid, outcome.validated_metric_delta))
+            .filter_map(|(bid, _)| {
+                self.cumulative_validated_delta(bid).map(|m| (*bid, m))
+            })
             .collect()
+    }
+
+    /// Cumulative validated improvement from the domain seed to a block.
+    ///
+    /// Sums the validator-observed metric deltas along the block's
+    /// ancestor chain (protocol truth only — never proposer claims).
+    /// Per-block deltas are relative to each block's own parent, so they
+    /// are not comparable across generations; the cumulative sum from the
+    /// seed is the quantity frontier selection and dominance evaluation
+    /// must compare. Returns `None` if any block on the chain lacks a
+    /// validated outcome (e.g. an invalidated ancestor).
+    pub fn cumulative_validated_delta(
+        &self,
+        block_id: &BlockId,
+    ) -> Option<MetricValue> {
+        let mut total = 0.0;
+        let mut current = *block_id;
+        loop {
+            let outcome = self.validated_outcomes.get(&current)?;
+            total += outcome.validated_metric_delta.as_f64();
+            let block = self.blocks.get(&current)?;
+            if !self.blocks.contains_key(&block.parent_id) {
+                // Reached the genesis boundary (genesis blocks are not
+                // stored in `blocks`).
+                return Some(MetricValue::new(total));
+            }
+            current = block.parent_id;
+        }
     }
 
     /// Gather valid branch tip metrics for dominance evaluation.
@@ -966,8 +1011,11 @@ impl SimulatorState {
         for family in fork_state.families.values() {
             for tip in &family.branch_tips {
                 if self.derived_validity(tip) == DerivedValidity::DirectValid {
-                    if let Some(outcome) = self.validated_outcomes.get(tip) {
-                        metrics.insert(*tip, outcome.validated_metric_delta);
+                    // Compare cumulative chain improvement, not per-block
+                    // deltas — tips at different depths have different
+                    // baselines.
+                    if let Some(metric) = self.cumulative_validated_delta(tip) {
+                        metrics.insert(*tip, metric);
                     }
                 }
             }
