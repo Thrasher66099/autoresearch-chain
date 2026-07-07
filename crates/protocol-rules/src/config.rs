@@ -22,6 +22,13 @@ pub struct ValidationConfig {
     /// Whether an Inconclusive provisional outcome causes rejection.
     /// When false, Inconclusive blocks remain in a pending state.
     pub inconclusive_is_rejection: bool,
+    /// Minimum validated improvement (in the metric's improvement
+    /// direction) required for acceptance. Claims inside the attestation
+    /// tolerance band are unfalsifiable by replay, so improvements below
+    /// noise scale must earn nothing — otherwise noise mining farms block
+    /// rewards risk-free (adversarial-sim finding). Must be calibrated
+    /// above the replay tolerance band. Zero disables the check.
+    pub min_accepted_delta: f64,
 }
 
 impl Default for ValidationConfig {
@@ -34,6 +41,7 @@ impl Default for ValidationConfig {
             fraud_triggers_rejection: true,
             min_block_bond: 50,
             inconclusive_is_rejection: true,
+            min_accepted_delta: 0.0,
         }
     }
 }

@@ -9,6 +9,7 @@ members = [
     "crates/reward-engine",
     "crates/storage-model",
     "crates/simulator",
+    "crates/adversarial-sim",
     "crates/node",
     "crates/cli",
 ]
@@ -29,6 +30,7 @@ arc-challenge-engine = { path = "crates/challenge-engine" }
 arc-reward-engine = { path = "crates/reward-engine" }
 arc-storage-model = { path = "crates/storage-model" }
 arc-simulator = { path = "crates/simulator" }
+arc-adversarial-sim = { path = "crates/adversarial-sim" }
 
 # External dependencies
 serde = { version = "1", features = ["derive"] }

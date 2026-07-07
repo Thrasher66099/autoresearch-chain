@@ -214,6 +214,36 @@ block, verified against its commitment, with frozen surfaces intact.
 
 ## Milestone C — Adversarial Simulation and Calibration (Phase 4)
 
+**Status: COMPLETE (2026-07).** Harness in `crates/adversarial-sim`
+(strategy-parameterized actors over the real `SimulatorState`,
+deterministic seeds, EV accounting from protocol escrows + slash
+distributions + compute costs); 11 scenario tests; calibration report in
+`simulations/calibration-report.md`. Key outcomes:
+
+- Fraud is +EV at naive parameters (bond 500 vs reward 1000 needs ~80%
+  audit coverage); calibrated set (bond ≥ 2× reward, provisional 10%)
+  brings break-even coverage to ~35%. `recommended_world()` encodes it.
+- The challenge game is the binding security layer: an auditor at 50%
+  coverage defeats fraud even with a fully lazy validator pool.
+- **Noise mining forced a protocol change**: sub-tolerance claims were
+  unfalsifiable free money; `ValidationConfig::min_accepted_delta` now
+  gates acceptance on validated improvement clearing a threshold
+  calibrated above the tolerance band.
+- Flagged gaps for later milestones: validator compensation (fees alone
+  reward laziness; attestation-level slashing needed) and
+  bond-at-submission (rejected fraud currently costs nothing).
+- §18 mechanism specified (see below); abstract waste model confirms it
+  bounds honest waste. Economic stress tests and successor-track
+  scenarios remain future Phase 4 work.
+
+The §18 **evaluation-surface challenge** is specified in
+`protocol-v0.2.md` § Evaluation-Surface Challenges and `attack-model.md`
+§18: a bonded challenge carrying a budget-bounded demonstration generator
+(RTS-declared source/compute limits), adjudicated by pure validator
+replay — upheld ⇒ domain Deprecated, seed bond slashed with challenger
+share; rejected ⇒ challenger bond forfeited. No discretionary truth.
+Implementation is future work.
+
 **Goal:** subject the incentive system to scripted adversaries and calibrate
 protocol parameters. This is the project's actual scientific test: does
 honest play dominate under the implemented economics?

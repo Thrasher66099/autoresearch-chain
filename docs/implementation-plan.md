@@ -171,6 +171,7 @@ Phase 0 is substantially complete. The Rust workspace contains 10 crates (~10,60
 | `simulator` | Implemented | Integrated state machine composing all engines; 51 scenario tests; whole-state snapshot persistence (serde JSON) |
 | `storage-model` | Partial | Content-addressed artifact store (BLAKE3), ArtifactStore trait, InMemoryArtifactStore, evidence bundling, file-from-disk ingestion; Python-Rust hash agreement verified; materialization triggers and frontier assembly not yet implemented |
 | `node` | Partial | Phase 1 target; file-based state persistence, CLI transaction submission (18 write commands, including challenge adjudication and expiry), and state queries (5 read commands) implemented; event log / state-transition trace not yet implemented |
+| `adversarial-sim` | Implemented | Phase 4 harness: strategy-parameterized actors over the simulator, deterministic episodes, per-strategy EV accounting, calibration sweep binary; results in `simulations/calibration-report.md` |
 | `cli` | Stub | Phase 1 target |
 
 ### Protocol-truth hardening
@@ -366,7 +367,7 @@ This is essential to make the chain more than a ledger of diffs.
 
 ## Phase 4 — Multi-Actor Simulation and Adversarial Testing
 
-**Status:** Not started as a dedicated phase. The simulator already covers some adversarial scenarios at unit/integration level (fork competition, invalidation cascades, ancestry poisoning, truth-bearing attestation filtering). Phase 4 is about sustained multi-actor economic stress testing.
+**Status:** First calibration complete. The `adversarial-sim` crate drives the real protocol state machine with strategy-parameterized actors (honest/fraudulent/noise-mining proposers, honest/rubber-stamp validators, auditing/griefing challengers), deterministic seeded randomness, and per-participant EV accounting derived from protocol escrow records and slash distributions plus exogenous compute costs. Findings and recommended Stage 1 parameters are recorded in `simulations/calibration-report.md`: fraud requires bond ≥ 2× base reward with a 10% provisional tranche (break-even audit coverage ~35%); the challenge game, not validator diligence, is the binding security layer; noise mining forced a protocol change (`ValidationConfig::min_accepted_delta` — acceptance requires validated improvement above a threshold calibrated over the tolerance band); validator compensation and bond-at-submission are flagged gaps. Economic stress tests (reward starvation, fork proliferation) and successor-track scenarios remain.
 
 ### Goal
 

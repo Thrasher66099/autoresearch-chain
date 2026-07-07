@@ -293,6 +293,41 @@ If a challenge **fails**, the challenger loses their bond.
 
 This is the core truth-seeking mechanism. The system relies on the economic incentive for challengers to identify and dispute false claims.
 
+### Evaluation-Surface Challenges
+
+**Status: specified, not implemented.** Addresses attack-model §18
+(degenerate evaluation surface): a domain whose metric can be inflated
+without genuine research work.
+
+A bonded challenge may target a domain's **evaluation surface** rather
+than an individual block. The challenge carries a **demonstration
+generator**: a program that must satisfy budgets declared at genesis under
+the domain's RTS (for RTS-1 defaults: source ≤ 64 KiB, compute ≤ 1% of
+the domain's declared time budget, no network access, no training-data
+access beyond artifacts genesis makes available to all participants).
+
+Adjudication is pure replay:
+
+- Assigned validators execute the generator under the declared budgets.
+- **Upheld** if the generated submission's evaluated score is ≥ the
+  domain's current canonical frontier score: the domain transitions to
+  `Deprecated`. No new blocks are accepted; unsettled reward escrows
+  unwind (proposer bonds returned, unreleased tranches cancelled); the
+  domain creator's seed bond is slashed, with a configured share paid to
+  the challenger; settled history is preserved.
+- **Rejected** otherwise: the challenger forfeits the bond.
+
+Rationale: a metric matchable by a budget-bounded trivial program does not
+measure research. The budgets make "trivial" objective; replay makes
+adjudication auditable; no discretionary truth is introduced. The
+challenge bond must be at least the domain's block bond scale to deter
+frivolous attacks on healthy domains.
+
+Deliberate limits: exploits costlier than the demonstration budget are
+out of scope for this mechanism (Stage 2 transfer validation is the
+backstop), and genuinely saturable metrics being deprecated is correct
+behavior, not collateral damage.
+
 ---
 
 ## Reward Structure
