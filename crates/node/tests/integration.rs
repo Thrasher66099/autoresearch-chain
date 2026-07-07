@@ -965,3 +965,172 @@ fn test_keygen_produces_usable_identity() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+// =======================================================================
+// E2/E3: sequencer + follower networking
+// =======================================================================
+
+#[test]
+fn test_sequencer_and_follower_end_to_end() {
+    let dir = test_dir("network");
+    let seq_state = dir.join("sequencer.json");
+    let follower_state = dir.join("follower.json");
+    let store = dir.join("store");
+    fs::create_dir_all(&store).unwrap();
+    let listen = "127.0.0.1:18734";
+    let base = format!("http://{}", listen);
+
+    // Authority + actor identities.
+    let authority = arc_identity::Keypair::from_secret_bytes(&[9u8; 32]);
+    let proposer = arc_identity::Keypair::from_secret_bytes(&[10u8; 32]);
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{:02x}", x)).collect::<String>();
+    let authority_hex = hex(&authority.public_bytes());
+    let key_file = dir.join("authority.json");
+    fs::write(
+        &key_file,
+        serde_json::json!({ "secret": hex(&authority.secret_bytes()) }).to_string(),
+    )
+    .unwrap();
+
+    // Both nodes start from identical signed-enforcement states.
+    run_ok(&["--state", seq_state.to_str().unwrap(), "init", "--require-signatures"]);
+    run_ok(&["--state", follower_state.to_str().unwrap(), "init", "--require-signatures"]);
+
+    // Start the sequencer.
+    let mut child = Command::new(arc_node_bin())
+        .args([
+            "--state", seq_state.to_str().unwrap(),
+            "serve",
+            "--authority-key", key_file.to_str().unwrap(),
+            "--listen", listen,
+            "--store", store.to_str().unwrap(),
+        ])
+        .spawn()
+        .expect("failed to spawn sequencer");
+
+    // Wait for readiness.
+    let mut ready = false;
+    for _ in 0..50 {
+        if ureq::get(&format!("{}/status", base)).call().is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(ready, "sequencer did not come up");
+
+    let post = |kind: &str, payload: &serde_json::Value| -> (u16, serde_json::Value) {
+        match ureq::post(&format!("{}/tx/{}", base, kind))
+            .send_string(&payload.to_string())
+        {
+            Ok(resp) => {
+                let code = resp.status();
+                (code, serde_json::from_str(&resp.into_string().unwrap()).unwrap())
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                (code, serde_json::from_str(&resp.into_string().unwrap()).unwrap())
+            }
+            Err(e) => panic!("transport error: {}", e),
+        }
+    };
+
+    // Unsigned genesis refused (enforcement holds over HTTP).
+    let mut genesis = genesis_json();
+    genesis["proposer"] = serde_json::json!(hex(&proposer.public_bytes()));
+    let (code, body) = post("submit-genesis", &genesis);
+    assert_eq!(code, 422, "unsigned tx must be refused: {}", body);
+
+    // Signed genesis accepted and ordered.
+    let message = arc_identity::genesis_message(
+        genesis["id"].as_str().unwrap(),
+        genesis["proposer"].as_str().unwrap(),
+        genesis["timestamp"].as_u64().unwrap(),
+    );
+    genesis["signature"] = serde_json::json!(hex(&proposer.sign(&message)));
+    let (code, body) = post("submit-genesis", &genesis);
+    assert_eq!(code, 200, "signed genesis: {}", body);
+    assert_eq!(body["seq"], 0);
+
+    // Continue the flow: conformance + 3 signed seed validations +
+    // finalize + validators + epoch.
+    let (code, _) = post("evaluate-conformance", &serde_json::json!({ "id": hex_id(1) }));
+    assert_eq!(code, 200);
+    for i in 1..=3u8 {
+        let validator = arc_identity::Keypair::from_secret_bytes(&[20 + i; 32]);
+        let mut record = serde_json::json!({
+            "genesis_id": hex_id(1),
+            "validator": hex(&validator.public_bytes()),
+            "vote": "Pass",
+            "observed_score": 0.93,
+            "timestamp": 1_700_000_000u64 + i as u64,
+        });
+        let msg = arc_identity::seed_validation_message(
+            &hex_id(1),
+            record["validator"].as_str().unwrap(),
+            "Pass",
+            Some(0.93),
+            record["timestamp"].as_u64().unwrap(),
+        );
+        record["signature"] = serde_json::json!(hex(&validator.sign(&msg)));
+        let (code, body) = post("record-seed-validation", &record);
+        assert_eq!(code, 200, "seed validation {}: {}", i, body);
+    }
+    let (code, _) = post("finalize-activation", &serde_json::json!({ "id": hex_id(1) }));
+    assert_eq!(code, 200);
+    let (code, _) = post("register-validators", &validator_pool_json());
+    assert_eq!(code, 200);
+    let (code, _) = post("advance-epoch", &serde_json::json!({}));
+    assert_eq!(code, 200);
+
+    // Sequencer status shows all 8 ordered entries.
+    let status: serde_json::Value = serde_json::from_str(
+        &ureq::get(&format!("{}/status", base)).call().unwrap().into_string().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status["seq"], 8);
+
+    // Artifact round trip (content-addressed).
+    let content = b"evidence bytes".to_vec();
+    let resp = ureq::post(&format!("{}/artifact", base))
+        .send_bytes(&content)
+        .unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&resp.into_string().unwrap()).unwrap();
+    let hash = stored["hash"].as_str().unwrap().to_string();
+    let mut fetched = Vec::new();
+    use std::io::Read;
+    ureq::get(&format!("{}/artifact/{}", base, hash))
+        .call()
+        .unwrap()
+        .into_reader()
+        .read_to_end(&mut fetched)
+        .unwrap();
+    assert_eq!(fetched, content);
+
+    // Follower syncs, verifies every entry, and matches the state hash.
+    let (stdout, stderr, success) = run_node(&[
+        "--state", follower_state.to_str().unwrap(),
+        "follow",
+        "--sequencer", &base,
+        "--authority", &authority_hex,
+        "--once",
+    ]);
+    assert!(success, "follow failed: {}", stderr);
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(result["applied"], 8);
+    assert_eq!(result["in_sync"], true);
+    assert_eq!(result["state_hash"], status["state_hash"]);
+
+    // A follower with the WRONG authority key rejects the log.
+    let other_state = dir.join("wrong_authority.json");
+    run_ok(&["--state", other_state.to_str().unwrap(), "init", "--require-signatures"]);
+    let wrong = hex(&proposer.public_bytes());
+    let stderr = run_err(&[
+        "--state", other_state.to_str().unwrap(),
+        "follow", "--sequencer", &base, "--authority", &wrong, "--once",
+    ]);
+    assert!(stderr.contains("authority signature"), "stderr: {}", stderr);
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&dir);
+}

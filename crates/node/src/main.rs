@@ -37,8 +37,11 @@
 //! runs as a local-only process. Python runners invoke it as a subprocess.
 
 mod commands;
+mod ordering;
 mod persistence;
 mod queries;
+mod server;
+mod txapply;
 
 use std::path::PathBuf;
 
@@ -65,6 +68,10 @@ fn main() {
         "init" => cmd_init(cmd_args, &state_path),
         "keygen" => commands::cmd_keygen(cmd_args),
         "inspect" => cmd_inspect(cmd_args, &state_path),
+
+        // Networked node (Milestone E2/E3).
+        "serve" => cmd_serve(cmd_args, &state_path),
+        "follow" => cmd_follow(cmd_args, &state_path),
 
         // Write commands (mutate state).
         "submit-genesis" => commands::cmd_submit_genesis(&state_path, cmd_args),
@@ -135,6 +142,12 @@ fn print_usage() {
     eprintln!("  init [PATH] [--require-signatures]  Create a fresh protocol state file");
     eprintln!("  keygen [out-file]                Generate an Ed25519 keypair (public key = participant ID)");
     eprintln!("  inspect [PATH]                   Display basic info about a saved state");
+    eprintln!();
+    eprintln!("Networked node (single-sequencer PoA, temporary scaffolding):");
+    eprintln!("  serve --authority-key <file> [--listen HOST:PORT] [--store DIR]");
+    eprintln!("                                   Run the sequencer HTTP server");
+    eprintln!("  follow --sequencer <url> --authority <pubkey-hex> [--once]");
+    eprintln!("                                   Sync and verify the ordering log");
     eprintln!();
     eprintln!("Genesis / domain activation:");
     eprintln!("  submit-genesis <json-file>                Submit a genesis proposal");
@@ -229,4 +242,78 @@ fn cmd_inspect(args: &[String], default_state_path: &PathBuf) {
     eprintln!("  Challenges:         {}", state.challenges.len());
     eprintln!("  Escrow records:     {}", state.escrow_records.len());
     eprintln!("  Pending activations:{}", state.pending_activations.len());
+}
+
+/// Read a flag's value from args (`--name value`).
+fn flag_value(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+}
+
+fn cmd_serve(args: &[String], state_path: &PathBuf) {
+    let listen = flag_value(args, "--listen").unwrap_or_else(|| "127.0.0.1:8730".to_string());
+    let key_file = flag_value(args, "--authority-key").unwrap_or_else(|| {
+        eprintln!("error: serve requires --authority-key <key-file> (from keygen)");
+        std::process::exit(1);
+    });
+    let key_json: serde_json::Value = match std::fs::read_to_string(&key_file)
+        .map_err(|e| e.to_string())
+        .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: cannot read key file {}: {}", key_file, e);
+            std::process::exit(1);
+        }
+    };
+    let secret_hex = key_json["secret"].as_str().unwrap_or("");
+    let mut secret = [0u8; 32];
+    if secret_hex.len() != 64 {
+        eprintln!("error: key file must contain a 64-hex-char `secret`");
+        std::process::exit(1);
+    }
+    for i in 0..32 {
+        secret[i] = u8::from_str_radix(&secret_hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
+    }
+
+    let config = server::ServeConfig {
+        state_path: state_path.clone(),
+        listen,
+        authority: arc_identity::Keypair::from_secret_bytes(&secret),
+        store_dir: flag_value(args, "--store").map(PathBuf::from),
+    };
+    let max_requests = flag_value(args, "--max-requests").and_then(|v| v.parse().ok());
+    if let Err(e) = server::serve(config, max_requests) {
+        eprintln!("error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn cmd_follow(args: &[String], state_path: &PathBuf) {
+    let sequencer = flag_value(args, "--sequencer").unwrap_or_else(|| {
+        eprintln!("error: follow requires --sequencer <url>");
+        std::process::exit(1);
+    });
+    let authority = flag_value(args, "--authority").unwrap_or_else(|| {
+        eprintln!("error: follow requires --authority <pubkey-hex>");
+        std::process::exit(1);
+    });
+    let once = args.iter().any(|a| a == "--once");
+    loop {
+        match server::follow_once(state_path, &sequencer, &authority) {
+            Ok(result) => {
+                println!("{}", serde_json::to_string(&result).unwrap());
+                if once {
+                    break;
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 }
