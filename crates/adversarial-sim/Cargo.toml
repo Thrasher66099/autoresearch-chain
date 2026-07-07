@@ -1,0 +1,13 @@
+[package]
+name = "arc-adversarial-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arc-protocol-types = { workspace = true }
+arc-protocol-rules = { workspace = true }
+arc-domain-engine = { workspace = true }
+arc-simulator = { workspace = true }
+arc-reward-engine = { workspace = true }

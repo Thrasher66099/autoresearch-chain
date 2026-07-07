@@ -371,17 +371,43 @@ The protocol pays for metric improvement that does not correspond to real resear
 - fork-native competition allows clean competing domains to absorb participants
 - permissionless genesis keeps the cost of launching a replacement domain low
 
-### Open risk
-The current protocol has no explicit mechanism for community-driven domain deprecation or flagging. A domain with a degenerate evaluation surface that passes conformance and seed validation can persist indefinitely, consuming validator attention and misleading participants.
+### Specified mitigation: the evaluation-surface challenge
 
-**This is an unspecified mechanism.** A domain health or deprecation mechanism should exist but does not yet have a complete design. Candidates under consideration include:
+The chosen mechanism (specified in `protocol-v0.2.md` § Evaluation-Surface
+Challenges; not yet implemented) is a **bonded challenge targeting the
+evaluation surface itself**, adjudicated by a budget-bounded demonstration:
 
-- validator-initiated domain review (quorum of validators can flag a domain for re-evaluation)
-- stake-weighted deprecation signals (participants signal low confidence, triggering review)
-- automatic deprecation based on participation decay (domains with sustained low proposer/validator activity lose priority)
-- challenge-based domain invalidation (a bonded challenge targeting the evaluation surface itself, not just individual blocks)
+- A challenger posts a bond and a **demonstration generator**: a program
+  within RTS-declared budgets (source size, compute time, no network, no
+  training-data access beyond what genesis grants) that produces a
+  submission scoring at or above the domain's current canonical frontier.
+- Validators replay the generator under the declared budgets. If the score
+  reproduces, the challenge is upheld: the domain is **Deprecated** — no
+  new blocks are accepted, unsettled reward escrows unwind, the domain
+  creator's seed bond is slashed with a share paid to the challenger, and
+  settled history is preserved.
+- If the generator does not reproduce the score within budget, the
+  challenge is rejected and the challenger forfeits the bond.
 
-The design must avoid introducing discretionary truth selection — deprecation should be based on legible, auditable criteria, not subjective quality judgments. This is a hard constraint given the project's core invariant.
+The legibility argument: if a trivially cheap program matches the
+frontier, the metric does not measure research — regardless of the domain
+creator's intent. "Trivially cheap" is made objective by the budgets, and
+adjudication is pure replay. No party exercises discretionary judgment
+about scientific quality, satisfying the core invariant.
+
+Deliberate consequences: a domain whose task is genuinely saturable by a
+tiny program *should* be deprecated — such a metric is not worth mining.
+Exploits requiring more than the demonstration budget are not caught by
+this mechanism; Stage 2 transfer validation remains the backstop for
+those. The abstract waste model in `crates/adversarial-sim` shows honest
+compute waste on an exploited domain is unbounded without this mechanism
+and bounded by exploit-discovery time with it.
+
+Alternatives considered and rejected: validator quorum flags and
+stake-weighted deprecation signals both reduce to voting on scientific
+quality (discretionary truth); participation-decay auto-deprecation is
+retained as a complementary hygiene policy but cannot stop an actively
+exploited domain that maintains participation.
 
 ---
 

@@ -354,8 +354,35 @@ impl SimulatorState {
             .clone();
 
         let summary = attestation::aggregate_attestations(&atts);
-        let outcome =
+        let mut outcome =
             attestation::evaluate_provisional_outcome(&summary, &self.validation_config);
+
+        // Minimum-improvement threshold: the validated mean improvement
+        // (in the metric's improvement direction) must reach
+        // min_accepted_delta. Claims inside the attestation tolerance band
+        // are unfalsifiable by replay, so sub-threshold improvements must
+        // not earn block rewards — otherwise noise mining is risk-free.
+        if outcome == ProvisionalOutcome::Accepted
+            && self.validation_config.min_accepted_delta > 0.0
+        {
+            let domain_id = self
+                .blocks
+                .get(block_id)
+                .ok_or_else(|| format!("block {} not found", block_id))?
+                .domain_id;
+            let higher_is_better = self
+                .metric_directions
+                .get(&domain_id)
+                .map(|d| *d == MetricDirection::HigherBetter)
+                .unwrap_or(true);
+            let improvement = summary
+                .mean_observed_delta
+                .map(|m| if higher_is_better { m } else { -m })
+                .unwrap_or(f64::NEG_INFINITY);
+            if improvement < self.validation_config.min_accepted_delta {
+                outcome = ProvisionalOutcome::Rejected;
+            }
+        }
 
         let block = self
             .blocks
