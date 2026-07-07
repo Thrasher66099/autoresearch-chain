@@ -32,7 +32,8 @@ use arc_protocol_types::{
     Block, BlockId, BlockStatus, ChallengeId, ChallengeRecord, ChallengeTarget,
     ChallengeType, DerivedValidity, DomainId, EpochId, EscrowId, EscrowKind,
     EscrowRecord, EscrowStatus, ForkFamilyId, GenesisBlock, GenesisBlockId,
-    FeePayout, MetricDirection, MetricValue, ParticipantId, SlashDistribution, TokenAmount,
+    FeePayout, MetricDirection, MetricValue, ParticipantId, SlashDistribution, SubsidyPayout,
+    TokenAmount,
     ValidatedBlockOutcome, ValidationAttestation, ArtifactHash,
 };
 
@@ -115,6 +116,16 @@ pub struct SimulatorState {
     /// Proposer-fee shares paid to attesting validators.
     #[serde(default)]
     pub fee_payouts: Vec<FeePayout>,
+    /// Emissions-subsidy mint records (bounty-matching, capped).
+    #[serde(default)]
+    pub subsidy_payouts: Vec<SubsidyPayout>,
+    /// Total subsidy minted, ever (against `subsidy_total_cap`).
+    #[serde(default)]
+    pub subsidy_minted_total: u64,
+    /// Subsidy minted in the current epoch (against `subsidy_epoch_cap`;
+    /// reset on epoch advance).
+    #[serde(default)]
+    pub subsidy_minted_this_epoch: u64,
 }
 
 /// Reward-pool accounting for a funded domain.
@@ -169,12 +180,16 @@ impl SimulatorState {
             domain_pools: HashMap::new(),
             validator_bond_escrows: HashMap::new(),
             fee_payouts: Vec::new(),
+            subsidy_payouts: Vec::new(),
+            subsidy_minted_total: 0,
+            subsidy_minted_this_epoch: 0,
         }
     }
 
     /// Advance to the next epoch.
     pub fn advance_epoch(&mut self) {
         self.current_epoch = self.current_epoch.next();
+        self.subsidy_minted_this_epoch = 0;
     }
 
     /// Generate the next unique escrow ID.
@@ -846,6 +861,49 @@ impl SimulatorState {
                 if escrow.status == EscrowStatus::Held {
                     arc_reward_engine::release_escrow(escrow, self.current_epoch)
                         .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+
+        // Emissions subsidy (economics step 4): a settled block on a
+        // funded domain mints a bounty-matching subsidy to its proposer —
+        // rate decays by halving, bounded by per-epoch and lifetime hard
+        // caps. Settlement (not acceptance) is the trigger: the subsidy
+        // pays for surviving the challenge window, and slashed blocks
+        // never reach here. Zero-cap configs (legacy/test) mint nothing.
+        let config = &self.reward_config;
+        if config.subsidy_total_cap > 0 {
+            if let Some((proposer, domain_id)) = self
+                .blocks
+                .get(block_id)
+                .map(|b| (ParticipantId::from_bytes(*b.proposer.as_bytes()), b.domain_id))
+            {
+                if let Some(pool) = self.domain_pools.get(&domain_id) {
+                    let rate = config.subsidy_rate_at_epoch(self.current_epoch.0);
+                    let matched = pool.base_block_reward.as_u64() as u128 * rate as u128
+                        / 10_000;
+                    let remaining_total =
+                        config.subsidy_total_cap - self.subsidy_minted_total.min(config.subsidy_total_cap);
+                    let remaining_epoch = config
+                        .subsidy_epoch_cap
+                        .saturating_sub(self.subsidy_minted_this_epoch);
+                    let mint = (matched as u64)
+                        .min(remaining_total)
+                        .min(if config.subsidy_epoch_cap > 0 {
+                            remaining_epoch
+                        } else {
+                            u64::MAX
+                        });
+                    if mint > 0 {
+                        self.subsidy_minted_total += mint;
+                        self.subsidy_minted_this_epoch += mint;
+                        self.subsidy_payouts.push(SubsidyPayout {
+                            block_id: *block_id,
+                            proposer,
+                            amount: TokenAmount::new(mint),
+                            epoch: self.current_epoch,
+                        });
+                    }
                 }
             }
         }
