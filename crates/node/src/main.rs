@@ -92,6 +92,7 @@ fn main() {
         "reject-challenge" => commands::cmd_reject_challenge(&state_path, cmd_args),
         "expire-challenge" => commands::cmd_expire_challenge(&state_path, cmd_args),
         "advance-epoch" => commands::cmd_advance_epoch(&state_path),
+        "top-up-pool" => commands::cmd_top_up_pool(&state_path, cmd_args),
 
         // Read commands (query state).
         "list-domains" => queries::cmd_list_domains(&state_path),
@@ -99,6 +100,7 @@ fn main() {
         "show-frontier" => queries::cmd_show_frontier(&state_path, cmd_args),
         "show-challenge" => queries::cmd_show_challenge(&state_path, cmd_args),
         "list-blocks" => queries::cmd_list_blocks(&state_path, cmd_args),
+        "show-pool" => queries::cmd_show_pool(&state_path, cmd_args),
 
         "help" | "--help" | "-h" => print_usage(),
         _ => {
@@ -174,6 +176,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("Epoch:");
     eprintln!("  advance-epoch                    Advance to the next epoch");
+    eprintln!("  top-up-pool <domain-id> <amount> Top up a funded domain reward pool");
     eprintln!();
     eprintln!("Queries:");
     eprintln!("  list-domains                     List all registered domains");

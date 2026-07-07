@@ -284,6 +284,11 @@ pub fn apply_tx(
             sim.expire_challenge(&id)?;
             Ok(serde_json::json!({ "status": "challenge_expired" }))
         }
+        "top-up-pool" => {
+            let domain_id = DomainId::from_bytes(parse_hex32(jstr(payload, "domain_id"))?);
+            sim.top_up_pool(&domain_id, TokenAmount::new(ju(payload, "amount")))?;
+            Ok(serde_json::json!({ "status": "pool_topped_up" }))
+        }
         "advance-epoch" => {
             sim.advance_epoch();
             Ok(serde_json::json!({ "epoch": sim.current_epoch.0 }))

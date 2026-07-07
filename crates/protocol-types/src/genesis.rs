@@ -114,6 +114,20 @@ pub struct GenesisBlock {
     pub artifact_schema_ref: ArtifactHash,
     /// Economic bond posted by the proposer.
     pub seed_bond: TokenAmount,
+    /// Research bounty pool escrowed at genesis. Funds all staged block
+    /// rewards for the domain (see docs/economics-design.md). Zero means
+    /// an unfunded legacy/test domain: rewards fall back to the global
+    /// `RewardConfig` and no pool accounting applies.
+    #[serde(default)]
+    pub reward_pool: TokenAmount,
+    /// Fraction of the reward pool reserved for validation and
+    /// adversarial work, in basis points.
+    #[serde(default)]
+    pub validation_reserve_bps: u16,
+    /// Reward paid per accepted block, drawn from the pool. Zero on
+    /// unfunded domains (global default applies).
+    #[serde(default)]
+    pub base_block_reward: TokenAmount,
     /// License status declaration for dataset and assets.
     pub license_declaration: String,
 

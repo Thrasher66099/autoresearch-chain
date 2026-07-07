@@ -265,3 +265,33 @@ pub fn cmd_list_blocks(state_path: &Path, args: &[String]) {
         "blocks": blocks,
     }));
 }
+
+/// `show-pool <domain-id>`
+pub fn cmd_show_pool(state_path: &Path, args: &[String]) {
+    let hex = args.first().unwrap_or_else(|| {
+        eprintln!("error: show-pool requires a domain ID (hex)");
+        std::process::exit(1);
+    });
+    let domain_id = match parse_domain_id(hex) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let state = load_state(state_path);
+    match state.domain_pool(&domain_id) {
+        Some(pool) => print_json(&serde_json::json!({
+            "domain_id": domain_id,
+            "balance": pool.balance,
+            "reserve_balance": pool.reserve_balance,
+            "base_block_reward": pool.base_block_reward,
+            "spent": pool.spent,
+            "dormant": pool.is_dormant(),
+        })),
+        None => {
+            eprintln!("error: domain {} has no reward pool (unfunded)", domain_id);
+            std::process::exit(1);
+        }
+    }
+}

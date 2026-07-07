@@ -326,6 +326,9 @@ mod tests {
             seed_score: MetricValue::new(0.93),
             artifact_schema_ref: ArtifactHash::ZERO,
             seed_bond: TokenAmount::new(1000),
+            reward_pool: TokenAmount::ZERO,
+            validation_reserve_bps: 0,
+            base_block_reward: TokenAmount::ZERO,
             license_declaration: "MIT".to_string(),
             timestamp: 1700000000,
         };

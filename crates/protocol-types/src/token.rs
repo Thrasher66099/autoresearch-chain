@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// Wraps `u64` to prevent accidental confusion between economic
 /// quantities and other integer fields (timestamps, budgets, quorum
 /// counts). The protocol does not define fractional token amounts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TokenAmount(u64);
 
 impl TokenAmount {

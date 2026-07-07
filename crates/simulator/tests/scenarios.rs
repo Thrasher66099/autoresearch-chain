@@ -2181,3 +2181,129 @@ fn scenario_ag_child_with_smaller_delta_advances_frontier() {
     submit_and_validate_with_delta(&mut sim, block_c, 0.05);
     assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
 }
+
+// =======================================================================
+// Scenarios AH: per-domain reward pools and dormancy (economics step 1)
+// =======================================================================
+
+/// Activate a funded domain: pool 2500, 20% validation reserve,
+/// per-block reward 1000 → spendable balance 2000 (two blocks' worth).
+fn setup_funded_domain() -> (SimulatorState, DomainId, GenesisBlockId) {
+    let mut sim = SimulatorState::new();
+    let mut genesis = valid_genesis_block();
+    genesis.reward_pool = TokenAmount::new(2500);
+    genesis.validation_reserve_bps = 2000;
+    genesis.base_block_reward = TokenAmount::new(1000);
+    let genesis_id = genesis.id;
+    let domain_id = genesis.domain_id;
+
+    sim.submit_genesis(genesis).unwrap();
+    sim.evaluate_conformance(&genesis_id).unwrap();
+    for i in 1..=3 {
+        sim.record_seed_validation(
+            &genesis_id,
+            SeedValidationRecord {
+                validator: test_validator_id(i),
+                vote: ValidatorVote::Pass,
+                observed_score: Some(MetricValue::new(0.9300)),
+                timestamp: 1700000000 + i as u64,
+            },
+        )
+        .unwrap();
+    }
+    sim.finalize_activation(&genesis_id).unwrap();
+    sim.register_validator_pool(ValidatorPool {
+        domain_id,
+        validators: (1..=10).map(test_validator_id).collect(),
+    });
+    (sim, domain_id, genesis_id)
+}
+
+#[test]
+fn scenario_ah_funded_domain_pays_rewards_from_pool() {
+    let (mut sim, domain_id, genesis_id) = setup_funded_domain();
+
+    // Reserve split at activation: 20% of 2500 = 500 reserved.
+    let pool = sim.domain_pool(&domain_id).unwrap();
+    assert_eq!(pool.balance, TokenAmount::new(2000));
+    assert_eq!(pool.reserve_balance, TokenAmount::new(500));
+    assert!(!pool.is_dormant());
+
+    // Accept a block: pool debited by the per-domain reward.
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+    let pool = sim.domain_pool(&domain_id).unwrap();
+    assert_eq!(pool.balance, TokenAmount::new(1000));
+    assert_eq!(pool.spent, TokenAmount::new(1000));
+
+    // Tranches use the domain's rate (default split: 20% provisional).
+    let escrows = sim.block_escrow_records(&block_id);
+    let total_reward: u64 = escrows
+        .iter()
+        .filter(|e| e.kind != EscrowKind::ProposerBond)
+        .map(|e| e.amount.as_u64())
+        .sum();
+    assert_eq!(total_reward, 1000);
+}
+
+#[test]
+fn scenario_ah_exhausted_pool_goes_dormant_and_topup_revives() {
+    let (mut sim, domain_id, genesis_id) = setup_funded_domain();
+
+    // Spend the pool down: two accepted blocks exhaust the 2000 balance.
+    for n in [10u8, 11u8] {
+        let block = make_block(n, genesis_id.as_block_id(), domain_id, 0.015);
+        submit_and_validate(&mut sim, block);
+    }
+    assert!(sim.domain_pool(&domain_id).unwrap().is_dormant());
+
+    // Dormant: new submissions are refused upfront.
+    let block = make_block(12, genesis_id.as_block_id(), domain_id, 0.015);
+    let err = sim.submit_block(block).unwrap_err();
+    assert!(err.contains("dormant"), "got: {}", err);
+
+    // Permissionless top-up lifts dormancy.
+    sim.top_up_pool(&domain_id, TokenAmount::new(1500)).unwrap();
+    assert!(!sim.domain_pool(&domain_id).unwrap().is_dormant());
+    let block = make_block(12, genesis_id.as_block_id(), domain_id, 0.015);
+    submit_and_validate(&mut sim, block);
+    assert_eq!(sim.domain_pool(&domain_id).unwrap().spent, TokenAmount::new(3000));
+}
+
+#[test]
+fn scenario_ah_funded_domain_requires_block_reward() {
+    let mut sim = SimulatorState::new();
+    let mut genesis = valid_genesis_block();
+    genesis.reward_pool = TokenAmount::new(1000);
+    genesis.base_block_reward = TokenAmount::ZERO;
+    let genesis_id = genesis.id;
+    sim.submit_genesis(genesis).unwrap();
+    sim.evaluate_conformance(&genesis_id).unwrap();
+    for i in 1..=3 {
+        sim.record_seed_validation(
+            &genesis_id,
+            SeedValidationRecord {
+                validator: test_validator_id(i),
+                vote: ValidatorVote::Pass,
+                observed_score: Some(MetricValue::new(0.9300)),
+                timestamp: 1700000000 + i as u64,
+            },
+        )
+        .unwrap();
+    }
+    let err = sim.finalize_activation(&genesis_id).unwrap_err();
+    assert!(err.contains("base_block_reward"), "got: {}", err);
+}
+
+#[test]
+fn scenario_ah_unfunded_domain_keeps_legacy_behavior() {
+    // reward_pool == 0: no pool accounting, no dormancy, global config.
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    assert!(sim.domain_pool(&domain_id).is_none());
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    submit_and_validate(&mut sim, block);
+    assert!(sim.domain_pool(&domain_id).is_none());
+    // Top-up on an unfunded domain is refused.
+    assert!(sim.top_up_pool(&domain_id, TokenAmount::new(1)).is_err());
+}

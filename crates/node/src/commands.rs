@@ -835,3 +835,44 @@ pub fn cmd_keygen(args: &[String]) {
         None => print_json(&out),
     }
 }
+
+/// `top-up-pool <domain-id> <amount>`
+///
+/// Permissionlessly top up a funded domain's reward pool.
+pub fn cmd_top_up_pool(state_path: &Path, args: &[String]) {
+    if args.len() < 2 {
+        eprintln!("error: top-up-pool requires <domain-id> <amount>");
+        std::process::exit(1);
+    }
+    let domain_id = match parse_hex_bytes(&args[0]) {
+        Ok(b) => DomainId::from_bytes(b),
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let amount: u64 = match args[1].parse() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: invalid amount: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match load_mutate_save(state_path, |sim| {
+        sim.top_up_pool(&domain_id, TokenAmount::new(amount))?;
+        let pool = sim.domain_pool(&domain_id).unwrap();
+        Ok(serde_json::json!({
+            "status": "pool_topped_up",
+            "domain_id": domain_id,
+            "balance": pool.balance,
+            "dormant": pool.is_dormant(),
+        }))
+    }) {
+        Ok(result) => print_json(&result),
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
