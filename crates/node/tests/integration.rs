@@ -527,6 +527,112 @@ fn test_open_challenge_and_show_challenge() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Open a challenge against `block_id` and return the challenge ID hex.
+fn open_challenge(dir: &PathBuf, state_str: &str, block_id: &str) -> String {
+    let challenge_id = hex_id(1);
+    let challenge_file = write_json(
+        dir,
+        "challenge.json",
+        &challenge_params_json(1, block_id, 5),
+    );
+    let result = run_ok(&["--state", state_str, "open-challenge", &challenge_file]);
+    assert_eq!(result["challenge_id"], challenge_id);
+    challenge_id
+}
+
+#[test]
+fn test_challenge_upheld_invalidates_block() {
+    let dir = test_dir("challenge_upheld");
+    let state = dir.join("state.json");
+    let state_str = state.to_str().unwrap();
+
+    run_node(&["init", state_str]);
+    let (block_id, _) = setup_domain_with_block(&dir, state_str);
+    let challenge_id = open_challenge(&dir, state_str, &block_id);
+
+    // Begin review: Open -> UnderReview.
+    let result = run_ok(&["--state", state_str, "begin-review", &challenge_id]);
+    assert_eq!(result["status"], "challenge_under_review");
+    let result = run_ok(&["--state", state_str, "show-challenge", &challenge_id]);
+    assert_eq!(result["status"], "UnderReview");
+
+    // Uphold: UnderReview -> Upheld, target block invalidated.
+    let result = run_ok(&["--state", state_str, "uphold-challenge", &challenge_id]);
+    assert_eq!(result["status"], "challenge_upheld");
+    let result = run_ok(&["--state", state_str, "show-challenge", &challenge_id]);
+    assert_eq!(result["status"], "Upheld");
+
+    // Block is invalidated and its escrow slashed.
+    let result = run_ok(&["--state", state_str, "show-block", &block_id]);
+    assert_eq!(result["derived_validity"], "DirectInvalid");
+    assert_eq!(result["escrow"]["status"], "Slashed");
+
+    // Frontier reverts: the invalidated block is no longer canonical.
+    let result = run_ok(&["--state", state_str, "show-frontier", &hex_id(1)]);
+    assert!(result["canonical_frontier"].is_null());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_challenge_rejected_preserves_block() {
+    let dir = test_dir("challenge_rejected");
+    let state = dir.join("state.json");
+    let state_str = state.to_str().unwrap();
+
+    run_node(&["init", state_str]);
+    let (block_id, _) = setup_domain_with_block(&dir, state_str);
+    let challenge_id = open_challenge(&dir, state_str, &block_id);
+
+    run_ok(&["--state", state_str, "begin-review", &challenge_id]);
+
+    // Reject: UnderReview -> Rejected, target block untouched.
+    let result = run_ok(&["--state", state_str, "reject-challenge", &challenge_id]);
+    assert_eq!(result["status"], "challenge_rejected");
+    let result = run_ok(&["--state", state_str, "show-challenge", &challenge_id]);
+    assert_eq!(result["status"], "Rejected");
+
+    // Block remains valid and canonical.
+    let result = run_ok(&["--state", state_str, "show-block", &block_id]);
+    assert_eq!(result["derived_validity"], "DirectValid");
+    let result = run_ok(&["--state", state_str, "show-frontier", &hex_id(1)]);
+    assert_eq!(result["canonical_frontier"], block_id);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_challenge_adjudication_rejects_invalid_transitions() {
+    let dir = test_dir("challenge_bad_transitions");
+    let state = dir.join("state.json");
+    let state_str = state.to_str().unwrap();
+
+    run_node(&["init", state_str]);
+    let (block_id, _) = setup_domain_with_block(&dir, state_str);
+    let challenge_id = open_challenge(&dir, state_str, &block_id);
+
+    // Uphold/reject straight from Open must fail (review not begun).
+    let stderr = run_err(&["--state", state_str, "uphold-challenge", &challenge_id]);
+    assert!(!stderr.is_empty());
+    let stderr = run_err(&["--state", state_str, "reject-challenge", &challenge_id]);
+    assert!(!stderr.is_empty());
+
+    // Unknown challenge ID.
+    let stderr = run_err(&["--state", state_str, "begin-review", &hex_id(99)]);
+    assert!(stderr.contains("not found"), "stderr: {}", stderr);
+
+    // Missing argument.
+    let stderr = run_err(&["--state", state_str, "begin-review"]);
+    assert!(stderr.contains("requires a challenge ID"), "stderr: {}", stderr);
+
+    // Failed transitions must not corrupt state: challenge is still Open,
+    // so the full review -> uphold path still works.
+    run_ok(&["--state", state_str, "begin-review", &challenge_id]);
+    run_ok(&["--state", state_str, "uphold-challenge", &challenge_id]);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_advance_epoch_returns_correct_epoch() {
     let dir = test_dir("advance_epoch");

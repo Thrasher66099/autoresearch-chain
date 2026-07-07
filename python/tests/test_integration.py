@@ -33,20 +33,18 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from arc_runner.autoresearch_adapter import AutoresearchAdapter
+from arc_runner.challenger import ChallengerConfig, ChallengerRunner
 from arc_runner.client import ArcNodeClient, ProtocolError, generate_id
 from arc_runner.domains import prepare_genesis
 from arc_runner.domains.qmd_query_expansion import QMDGenesisPackager
-from arc_runner.evidence import EvidenceBundle, EvidenceBundler, blake3_bytes
+from arc_runner.evidence import EvidenceBundle, EvidenceBundler
 from arc_runner.proposer import ProposerConfig, ProposerRunner
 from arc_runner.validator import ValidatorConfig, ValidatorRunner
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -191,7 +189,9 @@ def validator_pool_data() -> dict:
 def synthetic_evidence_bundle(store_dir: Path) -> EvidenceBundle:
     """Create a synthetic evidence bundle with stored artifacts."""
     bundler = EvidenceBundler(store_dir)
-    diff_hash = bundler.hash_bytes(b"--- a/train.py\n+++ b/train.py\n@@ -1 +1 @@\n-lr=0.001\n+lr=0.0005\n")
+    diff_hash = bundler.hash_bytes(
+        b"--- a/train.py\n+++ b/train.py\n@@ -1 +1 @@\n-lr=0.001\n+lr=0.0005\n"
+    )
     config_hash = bundler.hash_bytes(b"lr: 0.0005\nepochs: 10")
     env_hash = bundler.hash_bytes(b'{"python_version": "3.10", "platform": "linux"}')
     log_hash = bundler.hash_bytes(b"epoch 1: loss=0.5\nepoch 2: loss=0.3\n")
@@ -732,7 +732,6 @@ class TestFullPipeline:
         client: ArcNodeClient,
     ):
         """Full pipeline: adapter experiment → proposer submit → validator evidence fetch."""
-        import shutil
 
         proposer_id = hex_id(1)
 
@@ -853,3 +852,192 @@ class TestFullPipeline:
         # Verify frontier updated.
         frontier = client.show_frontier(domain_id)
         assert frontier["canonical_frontier"] == block_id
+
+
+# ---------------------------------------------------------------------------
+# Helpers for challenge tests
+# ---------------------------------------------------------------------------
+
+def submit_and_accept_block(client: ArcNodeClient, domain_id: str, store_dir: Path) -> str:
+    """Submit a block and drive it through to accepted (UnderChallenge) status.
+
+    Returns the block_id.
+    """
+    genesis_id = hex_id(1)
+    block_id = hex_id(10)
+    evidence = synthetic_evidence_bundle(store_dir)
+
+    block = {
+        "id": block_id,
+        "domain_id": domain_id,
+        "parent_id": genesis_id,
+        "proposer": hex_id(1),
+        "child_state_ref": hex_id(60),
+        "diff_ref": hex_id(160),
+        "claimed_metric_delta": 0.015,
+        "evidence_bundle_hash": evidence.diff_hash,
+        "fee": 10,
+        "bond": 500,
+        "epoch_id": 1,
+        "status": "Submitted",
+        "timestamp": 1700001000,
+    }
+    client.submit_block(block)
+
+    assign_result = client.assign_validators(block_id)
+    for v in assign_result["assigned_validators"]:
+        client.submit_attestation({
+            "block_id": block_id,
+            "validator": v,
+            "vote": "Pass",
+            "observed_delta": 0.015,
+            "replay_evidence_ref": hex_id(70),
+            "timestamp": 1700002000,
+        })
+
+    result = client.evaluate_block(block_id)
+    assert result["outcome"] == "Accepted"
+    return block_id
+
+
+# ---------------------------------------------------------------------------
+# Tests: challenge lifecycle
+# ---------------------------------------------------------------------------
+
+class TestChallengeLifecycle:
+    """Test challenge open → review → upheld/rejected lifecycle."""
+
+    def test_challenge_upheld_invalidates_block(
+        self,
+        arc_node_bin: str,
+        state_path: str,
+        store_dir: Path,
+        client: ArcNodeClient,
+    ):
+        """Full challenge-upheld flow: block gets invalidated, frontier reverts."""
+        domain_id = activate_domain(client)
+
+        # Submit and accept a block (now in UnderChallenge status).
+        block_id = submit_and_accept_block(client, domain_id, store_dir)
+
+        # Verify frontier is the new block.
+        frontier = client.show_frontier(domain_id)
+        assert frontier["canonical_frontier"] == block_id
+
+        # Open challenge.
+        challenge_id = generate_id(
+            hex_id(99).encode("utf-8"),
+            block_id.encode("utf-8"),
+            b"1700003000",
+        )
+        evidence_ref = hex_id(80)
+        challenge_params = {
+            "challenge_id": challenge_id,
+            "challenge_type": "BlockReplay",
+            "target": {"Block": {"block_id": block_id}},
+            "challenger": hex_id(99),
+            "bond": 200,
+            "evidence_ref": evidence_ref,
+        }
+        result = client.open_challenge(challenge_params)
+        assert result["challenge_id"] == challenge_id
+
+        # Verify challenge exists.
+        challenge = client.show_challenge(challenge_id)
+        assert challenge["status"] == "Open"
+
+        # Begin review.
+        result = client.begin_challenge_review(challenge_id)
+        assert result["status"] == "challenge_under_review"
+
+        # Uphold challenge.
+        result = client.uphold_challenge(challenge_id)
+        assert result["status"] == "challenge_upheld"
+
+        # Verify block is invalidated.
+        block_detail = client.show_block(block_id)
+        assert block_detail["derived_validity"] == "DirectInvalid"
+
+        # Frontier reverts to None (no valid blocks — genesis is the parent
+        # for new proposals, but isn't a regular block in the frontier).
+        frontier = client.show_frontier(domain_id)
+        assert frontier["canonical_frontier"] is None
+
+    def test_challenge_rejected_preserves_block(
+        self,
+        arc_node_bin: str,
+        state_path: str,
+        store_dir: Path,
+        client: ArcNodeClient,
+    ):
+        """Full challenge-rejected flow: block stays valid, frontier unchanged."""
+        domain_id = activate_domain(client)
+
+        # Submit and accept a block.
+        block_id = submit_and_accept_block(client, domain_id, store_dir)
+
+        # Verify frontier.
+        frontier = client.show_frontier(domain_id)
+        assert frontier["canonical_frontier"] == block_id
+
+        # Open challenge.
+        challenge_id = generate_id(
+            hex_id(99).encode("utf-8"),
+            block_id.encode("utf-8"),
+            b"1700003001",
+        )
+        challenge_params = {
+            "challenge_id": challenge_id,
+            "challenge_type": "BlockReplay",
+            "target": {"Block": {"block_id": block_id}},
+            "challenger": hex_id(99),
+            "bond": 200,
+            "evidence_ref": hex_id(81),
+        }
+        client.open_challenge(challenge_params)
+
+        # Begin review → reject.
+        client.begin_challenge_review(challenge_id)
+        result = client.reject_challenge(challenge_id)
+        assert result["status"] == "challenge_rejected"
+
+        # Block should still be valid.
+        block_detail = client.show_block(block_id)
+        assert block_detail["derived_validity"] == "DirectValid"
+
+        # Frontier should still point to the block.
+        frontier = client.show_frontier(domain_id)
+        assert frontier["canonical_frontier"] == block_id
+
+    def test_challenger_runner_open_challenge(
+        self,
+        arc_node_bin: str,
+        state_path: str,
+        store_dir: Path,
+        client: ArcNodeClient,
+    ):
+        """ChallengerRunner can find suspect blocks and open a challenge."""
+        domain_id = activate_domain(client)
+
+        # Submit and accept a block.
+        block_id = submit_and_accept_block(client, domain_id, store_dir)
+
+        # Create challenger runner.
+        challenger_config = ChallengerConfig(
+            node_binary=arc_node_bin,
+            state_path=state_path,
+            store_dir=str(store_dir),
+            domain_id=domain_id,
+            challenger_id=hex_id(99),
+        )
+        challenger = ChallengerRunner(challenger_config)
+
+        # Find suspect blocks.
+        suspects = challenger.find_suspect_blocks()
+        assert len(suspects) == 1
+
+        # Open challenge via runner.
+        evidence_ref = hex_id(82)
+        result = challenger.open_challenge(block_id, evidence_ref, bond=200)
+        assert "challenge_id" in result
+        assert len(result["challenge_id"]) == 64

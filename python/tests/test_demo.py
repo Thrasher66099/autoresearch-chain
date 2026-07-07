@@ -41,7 +41,6 @@ from arc_runner.domains.qmd_experiment import (
 )
 from arc_runner.evidence import EvidenceBundler
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -205,7 +204,7 @@ class TestQMDExperiment:
         workspace = tmp_path / "workspace"
         shutil.copytree(fixtures, workspace / "finetune")
 
-        training_result = run_training(str(workspace))
+        run_training(str(workspace))
 
         store_dir = tmp_path / "store"
         bundler = EvidenceBundler(store_dir)
@@ -388,4 +387,170 @@ class TestRealComputationThroughProtocol:
         assert result["status"] == "block_finalized"
 
         # Cleanup workspace.
+        shutil.rmtree(workspace, ignore_errors=True)
+
+    def test_real_replay_challenge_detects_fraud(self, tmp_path: Path):
+        """Challenger replays a block with tampered score and gets it invalidated.
+
+        Flow:
+        1. Submit a block with an inflated claimed score (0.99 vs real ~0.69)
+        2. Challenger replays, detects mismatch
+        3. Opens challenge, challenge is upheld
+        4. Block invalidated, frontier reverts to genesis
+        """
+        arc_node_bin = find_arc_node()
+
+        from arc_runner.challenger import ChallengerConfig, ChallengerRunner
+        from arc_runner.client import ArcNodeClient
+        from arc_runner.domains import prepare_genesis
+        from arc_runner.domains.qmd_query_expansion import QMDGenesisPackager
+        from arc_runner.proposer import ProposerConfig, ProposerRunner
+
+        store_dir = tmp_path / "artifacts"
+        store_dir.mkdir()
+        state_path = str(tmp_path / "state.json")
+        proposer_id = hex_id(1)
+        challenger_id = hex_id(99)
+
+        # --- Phase 1: Initialize and activate domain ---
+        client = ArcNodeClient(state_path, arc_node_bin)
+        client.init()
+
+        fixtures = _fixtures_dir()
+        packager = QMDGenesisPackager(fixtures, store_dir)
+        raw_genesis = packager.package()
+
+        seed_result = run_evaluation(str(fixtures), BASELINE_CONFIG)
+        raw_genesis["seed_score"] = seed_result["reward_score"]
+
+        genesis = prepare_genesis(raw_genesis, proposer_id)
+        client.submit_genesis(genesis)
+        client.evaluate_conformance(genesis["id"])
+        for i in range(1, 4):
+            client.record_seed_validation(genesis["id"], {
+                "validator": hex_id(i),
+                "vote": "Pass",
+                "observed_score": seed_result["reward_score"],
+                "timestamp": 1700000000 + i,
+            })
+        client.finalize_activation(genesis["id"])
+        pool = {
+            "domain_id": genesis["domain_id"],
+            "validators": [hex_id(i) for i in range(1, 11)],
+        }
+        client.register_validators(pool)
+
+        domain_id = genesis["domain_id"]
+        genesis_id = genesis["id"]
+
+        # --- Phase 2: Run real experiment but claim inflated score ---
+        from arc_runner.autoresearch_adapter import AutoresearchAdapter
+
+        adapter = AutoresearchAdapter(raw_genesis, store_dir)
+        workspace = adapter.pull_frontier()
+        try:
+            adapter.enforce_surfaces(workspace)
+            run_training(workspace)
+
+            experiment_result = adapter.capture_result(
+                workspace, seed_result["reward_score"]
+            )
+        finally:
+            pass  # Keep workspace for replay.
+
+        # Tamper: inflate the claimed delta.
+        tampered_delta = 0.99 - seed_result["reward_score"]
+        experiment_result["delta"] = tampered_delta
+        experiment_result["score"] = 0.99  # Fraudulent claim.
+
+        # --- Phase 3: Submit block with inflated claim ---
+        proposer_config = ProposerConfig(
+            node_binary=arc_node_bin,
+            state_path=state_path,
+            store_dir=str(store_dir),
+            domain_id=domain_id,
+            proposer_id=proposer_id,
+            genesis_id=genesis_id,
+            bond=500,
+            fee=10,
+        )
+        proposer = ProposerRunner(proposer_config)
+        parent_id = proposer.get_frontier_parent()
+        result = proposer.submit_block(parent_id, experiment_result)
+        block_id = result["block_id"]
+
+        # --- Phase 4: Validators (naively) accept ---
+        # In this scenario, validators are colluding or naive — they
+        # pass the block. The challenger catches the fraud.
+        assign_result = client.assign_validators(block_id)
+        for v in assign_result["assigned_validators"]:
+            client.submit_attestation({
+                "block_id": block_id,
+                "validator": v,
+                "vote": "Pass",
+                "observed_delta": tampered_delta,
+                "replay_evidence_ref": hex_id(70),
+                "timestamp": 1700002000,
+            })
+        result = client.evaluate_block(block_id)
+        assert result["outcome"] == "Accepted"
+
+        # Frontier should point to the fraudulent block.
+        frontier = client.show_frontier(domain_id)
+        assert frontier["canonical_frontier"] == block_id
+
+        # --- Phase 5: Challenger replays and detects fraud ---
+        challenger_config = ChallengerConfig(
+            node_binary=arc_node_bin,
+            state_path=state_path,
+            store_dir=str(store_dir),
+            domain_id=domain_id,
+            challenger_id=challenger_id,
+        )
+        challenger = ChallengerRunner(challenger_config)
+
+        # Find the suspect block.
+        suspects = challenger.find_suspect_blocks()
+        assert len(suspects) == 1
+
+        # Fetch evidence and replay.
+        block_detail = client.show_block(block_id)
+        evidence_info = challenger.fetch_evidence(block_detail)
+        assert evidence_info is not None
+        assert evidence_info["available"] is True
+
+        bundler = EvidenceBundler(store_dir)
+        replay_result = replay_and_verify(
+            workspace=workspace,
+            evidence_manifest=evidence_info["manifest"],
+            bundler=bundler,
+            claimed_score=0.99,  # The fraudulent claim.
+        )
+
+        # Challenger detects mismatch.
+        assert replay_result["vote"] == "Fail"
+        assert replay_result["difference"] > 0.1
+
+        # Store challenge evidence.
+        challenge_evidence = json.dumps(replay_result, sort_keys=True).encode()
+        evidence_ref = bundler.hash_bytes(challenge_evidence)
+
+        # --- Phase 6: Open and uphold challenge ---
+        result = challenger.open_challenge(block_id, evidence_ref, bond=200)
+        challenge_id = result["challenge_id"]
+
+        client.begin_challenge_review(challenge_id)
+        result = client.uphold_challenge(challenge_id)
+        assert result["status"] == "challenge_upheld"
+
+        # --- Phase 7: Verify consequences ---
+        block_detail = client.show_block(block_id)
+        assert block_detail["derived_validity"] == "DirectInvalid"
+
+        # Frontier reverts to None (genesis is the parent for new proposals
+        # but isn't a regular block in the frontier).
+        frontier = client.show_frontier(domain_id)
+        assert frontier["canonical_frontier"] is None
+
+        # Cleanup.
         shutil.rmtree(workspace, ignore_errors=True)

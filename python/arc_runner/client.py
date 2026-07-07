@@ -220,6 +220,24 @@ class ArcNodeClient:
         """Open a challenge against a block."""
         return self._run_with_json_file("open-challenge", params)
 
+    def begin_challenge_review(self, challenge_id: str) -> dict:
+        """Begin review of an open challenge."""
+        return self._run(
+            ["--state", self.state_path, "begin-review", challenge_id]
+        )
+
+    def uphold_challenge(self, challenge_id: str) -> dict:
+        """Uphold a challenge (invalidates the target)."""
+        return self._run(
+            ["--state", self.state_path, "uphold-challenge", challenge_id]
+        )
+
+    def reject_challenge(self, challenge_id: str) -> dict:
+        """Reject a challenge (challenger loses bond)."""
+        return self._run(
+            ["--state", self.state_path, "reject-challenge", challenge_id]
+        )
+
     # ------------------------------------------------------------------
     # Epoch
     # ------------------------------------------------------------------
