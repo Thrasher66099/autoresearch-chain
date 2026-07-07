@@ -49,6 +49,9 @@ pub enum EscrowKind {
     SurvivalReward,
     /// Challenger's slashable challenge bond.
     ChallengerBond,
+    /// Validator's slashable registration bond (slashed when an
+    /// attestation challenge against the validator is upheld).
+    ValidatorBond,
 }
 
 /// Temporary holding of rewards pending challenge-window expiration.

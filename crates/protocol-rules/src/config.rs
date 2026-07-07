@@ -29,6 +29,10 @@ pub struct ValidationConfig {
     /// rewards risk-free (adversarial-sim finding). Must be calibrated
     /// above the replay tolerance band. Zero disables the check.
     pub min_accepted_delta: f64,
+    /// Slashable bond each validator posts at registration. Zero
+    /// disables validator bonding (legacy/test states). Required for
+    /// attestation slashing to bite.
+    pub validator_bond: u64,
 }
 
 impl Default for ValidationConfig {
@@ -42,6 +46,7 @@ impl Default for ValidationConfig {
             min_block_bond: 50,
             inconclusive_is_rejection: true,
             min_accepted_delta: 0.0,
+            validator_bond: 0,
         }
     }
 }

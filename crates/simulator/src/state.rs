@@ -109,6 +109,9 @@ pub struct SimulatorState {
     /// which fall back to the global `RewardConfig`.
     #[serde(default)]
     pub domain_pools: HashMap<DomainId, DomainPool>,
+    /// Validator registration bond escrows (attestation slashing).
+    #[serde(default)]
+    pub validator_bond_escrows: HashMap<arc_protocol_types::ValidatorId, EscrowId>,
 }
 
 /// Reward-pool accounting for a funded domain.
@@ -161,6 +164,7 @@ impl SimulatorState {
             metric_directions: HashMap::new(),
             require_signatures: false,
             domain_pools: HashMap::new(),
+            validator_bond_escrows: HashMap::new(),
         }
     }
 
@@ -290,6 +294,29 @@ impl SimulatorState {
 
     /// Register a validator pool for a domain.
     pub fn register_validator_pool(&mut self, pool: ValidatorPool) {
+        // Validator bonding: when configured, each registered validator
+        // posts a slashable bond (slashed by an upheld attestation
+        // challenge). Zero bond = legacy/test mode, no escrows.
+        if self.validation_config.validator_bond > 0 {
+            for v in &pool.validators {
+                if self.validator_bond_escrows.contains_key(v) {
+                    continue; // already bonded (re-registration)
+                }
+                let escrow_id = self.next_escrow_id();
+                let escrow = EscrowRecord {
+                    id: escrow_id,
+                    block_id: BlockId::from_bytes([0u8; 32]),
+                    kind: EscrowKind::ValidatorBond,
+                    beneficiary: ParticipantId::from_bytes(*v.as_bytes()),
+                    amount: TokenAmount::new(self.validation_config.validator_bond),
+                    status: EscrowStatus::Held,
+                    created_epoch: self.current_epoch,
+                    release_epoch: self.current_epoch,
+                };
+                self.escrow_records.insert(escrow_id, escrow);
+                self.validator_bond_escrows.insert(*v, escrow_id);
+            }
+        }
         self.validator_pools.insert(pool.domain_id, pool);
     }
 
@@ -358,6 +385,22 @@ impl SimulatorState {
             .entry(block.parent_id)
             .or_default()
             .push(block_id);
+
+        // Bond-at-submission (economics step 2): the proposer's bond is
+        // committed the moment the block enters validation, so retrying
+        // rejected fraud is never capital-free. Released on rejection,
+        // carried through the normal lifecycle on acceptance.
+        let bond_escrow_id = self.next_escrow_id();
+        let escrow = arc_reward_engine::create_block_escrow(
+            bond_escrow_id,
+            block_id,
+            ParticipantId::from_bytes(*block.proposer.as_bytes()),
+            block.bond,
+            self.current_epoch,
+            &self.reward_config,
+        );
+        self.escrow_records.insert(bond_escrow_id, escrow);
+        self.block_escrows.insert(block_id, vec![bond_escrow_id]);
 
         self.blocks.insert(block_id, block);
         Ok(block_id)
@@ -476,6 +519,22 @@ impl SimulatorState {
         // If accepted, proceed through challenge window.
         if outcome == ProvisionalOutcome::Accepted {
             self.on_block_accepted(block_id, &summary)?;
+        } else if self.block_status(block_id) == Some(BlockStatus::Rejected) {
+            // Bond-at-submission: rejection returns the proposer's bond.
+            // The cost of a rejected block is the fee and the wasted work;
+            // slashing requires adjudication (a challenge), never a vote
+            // tally alone.
+            if let Some(ids) = self.block_escrows.get(block_id).cloned() {
+                for id in ids {
+                    if let Some(escrow) = self.escrow_records.get_mut(&id) {
+                        if escrow.kind == EscrowKind::ProposerBond
+                            && escrow.status == EscrowStatus::Held
+                        {
+                            escrow.status = EscrowStatus::Released;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(outcome)
@@ -569,17 +628,8 @@ impl SimulatorState {
             pool.spent = TokenAmount::new(pool.spent.as_u64() + reward);
         }
 
-        // Create escrow record for the proposer's bond.
-        let bond_escrow_id = self.next_escrow_id();
-        let escrow = arc_reward_engine::create_block_escrow(
-            bond_escrow_id,
-            block.id,
-            proposer,
-            block.bond,
-            self.current_epoch,
-            &effective_config,
-        );
-        self.escrow_records.insert(bond_escrow_id, escrow);
+        // The proposer's bond escrow was committed at submission
+        // (bond-at-submission); it now rides the accepted lifecycle.
 
         // Create the staged reward tranches. The provisional tranche is
         // released immediately (the spec's "immediate incentive"); the
@@ -600,7 +650,9 @@ impl SimulatorState {
         self.escrow_records.insert(provisional_id, provisional);
         self.escrow_records.insert(survival_id, survival);
         self.block_escrows
-            .insert(block.id, vec![bond_escrow_id, provisional_id, survival_id]);
+            .entry(block.id)
+            .or_default()
+            .extend([provisional_id, survival_id]);
 
         // Open challenge window.
         {
@@ -902,9 +954,44 @@ impl SimulatorState {
             .map_err(|e| e.to_string())?;
         let challenger = challenge.challenger;
         let target = Self::challenge_target_block(&challenge.target);
+        let attestation_validator = match &challenge.target {
+            ChallengeTarget::Attestation { validator, .. } => Some(*validator),
+            _ => None,
+        };
 
         // The challenge succeeded: return the challenger's bond.
         self.resolve_challenge_escrow(challenge_id, false)?;
+
+        // Attestation challenges slash the attesting validator's
+        // registration bond — not the block. A dishonest attestation is
+        // the validator's offense; the block's fate is governed by its
+        // own challenges.
+        if let Some(validator) = attestation_validator {
+            let escrow_id = self.validator_bond_escrows.get(&validator).ok_or_else(|| {
+                format!("validator {} has no registration bond to slash", validator)
+            })?;
+            let escrow = self
+                .escrow_records
+                .get_mut(escrow_id)
+                .ok_or_else(|| format!("validator bond escrow {} missing", escrow_id))?;
+            arc_reward_engine::slash_escrow(escrow).map_err(|e| e.to_string())?;
+            let slashed = escrow.amount;
+            let (challenger_payout, burned) =
+                arc_reward_engine::compute_slash_distribution(slashed, &self.reward_config);
+            self.slash_distributions.insert(
+                *challenge_id,
+                SlashDistribution {
+                    challenge_id: *challenge_id,
+                    block_id: target.unwrap_or(BlockId::from_bytes([0u8; 32])),
+                    slashed_amount: slashed,
+                    challenger,
+                    challenger_payout,
+                    burned,
+                    epoch: self.current_epoch,
+                },
+            );
+            return Ok(());
+        }
 
         let Some(target_block_id) = target else {
             // Dominance challenges don't invalidate a specific block.
