@@ -30,10 +30,10 @@ use serde::{Serialize, Deserialize};
 
 use arc_protocol_types::{
     Block, BlockId, BlockStatus, ChallengeId, ChallengeRecord, ChallengeTarget,
-    ChallengeType, DerivedValidity, DomainId, EpochId, EscrowId, EscrowRecord,
-    EscrowStatus, ForkFamilyId, GenesisBlock, GenesisBlockId, MetricDirection,
-    MetricValue, ParticipantId, TokenAmount, ValidatedBlockOutcome,
-    ValidationAttestation, ArtifactHash,
+    ChallengeType, DerivedValidity, DomainId, EpochId, EscrowId, EscrowKind,
+    EscrowRecord, EscrowStatus, ForkFamilyId, GenesisBlock, GenesisBlockId,
+    MetricDirection, MetricValue, ParticipantId, SlashDistribution, TokenAmount,
+    ValidatedBlockOutcome, ValidationAttestation, ArtifactHash,
 };
 
 use arc_domain_engine::config::GenesisActivationConfig;
@@ -88,8 +88,12 @@ pub struct SimulatorState {
     pub validated_outcomes: HashMap<BlockId, ValidatedBlockOutcome>,
     /// Escrow records for accepted blocks.
     pub escrow_records: HashMap<EscrowId, EscrowRecord>,
-    /// Reverse index: block ID → escrow ID.
-    pub block_escrows: HashMap<BlockId, EscrowId>,
+    /// Reverse index: block ID → escrow IDs (bond + reward tranches).
+    pub block_escrows: HashMap<BlockId, Vec<EscrowId>>,
+    /// Reverse index: challenge ID → challenger bond escrow ID.
+    pub challenge_escrows: HashMap<ChallengeId, EscrowId>,
+    /// Slash distributions from upheld challenges, keyed by challenge.
+    pub slash_distributions: HashMap<ChallengeId, SlashDistribution>,
     /// Monotonic counter for generating unique fork family IDs.
     fork_family_counter: u64,
     /// Monotonic counter for generating unique escrow IDs.
@@ -118,6 +122,8 @@ impl SimulatorState {
             validated_outcomes: HashMap::new(),
             escrow_records: HashMap::new(),
             block_escrows: HashMap::new(),
+            challenge_escrows: HashMap::new(),
+            slash_distributions: HashMap::new(),
             fork_family_counter: 0,
             escrow_counter: 0,
             metric_directions: HashMap::new(),
@@ -127,6 +133,14 @@ impl SimulatorState {
     /// Advance to the next epoch.
     pub fn advance_epoch(&mut self) {
         self.current_epoch = self.current_epoch.next();
+    }
+
+    /// Generate the next unique escrow ID.
+    fn next_escrow_id(&mut self) -> EscrowId {
+        self.escrow_counter += 1;
+        let mut escrow_bytes = [0u8; 32];
+        escrow_bytes[..8].copy_from_slice(&self.escrow_counter.to_le_bytes());
+        EscrowId::from_bytes(escrow_bytes)
     }
 
     // -----------------------------------------------------------------------
@@ -400,22 +414,55 @@ impl SimulatorState {
             validation_epoch: self.current_epoch,
         });
 
-        // Create escrow record for the proposer's bond.
-        self.escrow_counter += 1;
-        let mut escrow_bytes = [0u8; 32];
-        escrow_bytes[..8].copy_from_slice(&self.escrow_counter.to_le_bytes());
-        let escrow_id = EscrowId::from_bytes(escrow_bytes);
+        // Fraud-exposure invariant: the provisional reward tranche is paid
+        // at acceptance and cannot be clawed back once released, so the
+        // proposer's slashable bond must cover it. Otherwise fraud would be
+        // net-positive even when caught.
+        let provisional_amount = self.reward_config.provisional_reward_amount();
+        if block.bond.as_u64() < provisional_amount.as_u64() {
+            return Err(format!(
+                "cannot accept block {}: bond {} does not cover the provisional \
+                 reward tranche {} (fraud-exposure invariant)",
+                block.id,
+                block.bond.as_u64(),
+                provisional_amount.as_u64()
+            ));
+        }
 
+        let proposer = ParticipantId::from_bytes(*block.proposer.as_bytes());
+
+        // Create escrow record for the proposer's bond.
+        let bond_escrow_id = self.next_escrow_id();
         let escrow = arc_reward_engine::create_block_escrow(
-            escrow_id,
+            bond_escrow_id,
             block.id,
-            ParticipantId::from_bytes(*block.proposer.as_bytes()),
+            proposer,
             block.bond,
             self.current_epoch,
             &self.reward_config,
         );
-        self.escrow_records.insert(escrow_id, escrow);
-        self.block_escrows.insert(block.id, escrow_id);
+        self.escrow_records.insert(bond_escrow_id, escrow);
+
+        // Create the staged reward tranches. The provisional tranche is
+        // released immediately (the spec's "immediate incentive"); the
+        // survival tranche is held until settlement after the challenge
+        // window.
+        let provisional_id = self.next_escrow_id();
+        let survival_id = self.next_escrow_id();
+        let (mut provisional, survival) = arc_reward_engine::create_reward_tranches(
+            provisional_id,
+            survival_id,
+            block.id,
+            proposer,
+            self.current_epoch,
+            &self.reward_config,
+        );
+        arc_reward_engine::release_escrow(&mut provisional, self.current_epoch)
+            .map_err(|e| e.to_string())?;
+        self.escrow_records.insert(provisional_id, provisional);
+        self.escrow_records.insert(survival_id, survival);
+        self.block_escrows
+            .insert(block.id, vec![bond_escrow_id, provisional_id, survival_id]);
 
         // Open challenge window.
         {
@@ -527,9 +574,14 @@ impl SimulatorState {
         }
 
         // Pre-check: verify escrow release timing before mutating block status.
-        // This prevents the block from transitioning to Settled while the
-        // escrow cannot be released yet.
-        if let Some(escrow_id) = self.block_escrows.get(block_id) {
+        // This prevents the block from transitioning to Settled while any of
+        // its escrows (bond, survival tranche) cannot be released yet.
+        let escrow_ids: Vec<EscrowId> = self
+            .block_escrows
+            .get(block_id)
+            .cloned()
+            .unwrap_or_default();
+        for escrow_id in &escrow_ids {
             if let Some(escrow) = self.escrow_records.get(escrow_id) {
                 if escrow.status == EscrowStatus::Held
                     && self.current_epoch.0 < escrow.release_epoch.0
@@ -549,11 +601,15 @@ impl SimulatorState {
             .ok_or_else(|| format!("block {} not found", block_id))?;
         block_lifecycle::settle_block(block).map_err(|e| e.to_string())?;
 
-        // Release the corresponding escrow (enforcing release_epoch).
-        if let Some(escrow_id) = self.block_escrows.get(block_id) {
+        // Release all still-held escrows for the block (proposer bond and
+        // survival tranche; the provisional tranche was released at
+        // acceptance), enforcing release_epoch.
+        for escrow_id in &escrow_ids {
             if let Some(escrow) = self.escrow_records.get_mut(escrow_id) {
-                arc_reward_engine::release_escrow(escrow, self.current_epoch)
-                    .map_err(|e| e.to_string())?;
+                if escrow.status == EscrowStatus::Held {
+                    arc_reward_engine::release_escrow(escrow, self.current_epoch)
+                        .map_err(|e| e.to_string())?;
+                }
             }
         }
 
@@ -599,8 +655,60 @@ impl SimulatorState {
         .map_err(|e| e.to_string())?;
 
         let id = challenge.id;
+
+        // Escrow the challenger's bond. It is released if the challenge is
+        // upheld or expires unresolved, and slashed if the challenge is
+        // rejected. For dominance challenges (no single target block) the
+        // escrow records a zero block ID.
+        let target_block_id =
+            Self::challenge_target_block(&challenge.target).unwrap_or(BlockId::ZERO);
+        let escrow_id = self.next_escrow_id();
+        let escrow = arc_reward_engine::create_challenge_escrow(
+            escrow_id,
+            target_block_id,
+            challenge.challenger,
+            challenge.bond,
+            self.current_epoch,
+        );
+        self.escrow_records.insert(escrow_id, escrow);
+        self.challenge_escrows.insert(id, escrow_id);
+
         self.challenges.insert(id, challenge);
         Ok(id)
+    }
+
+    /// The block a challenge targets, if the target names one.
+    fn challenge_target_block(target: &ChallengeTarget) -> Option<BlockId> {
+        match target {
+            ChallengeTarget::Block { block_id } => Some(*block_id),
+            ChallengeTarget::Attestation { block_id, .. } => Some(*block_id),
+            ChallengeTarget::Attribution { block_id, .. } => Some(*block_id),
+            ChallengeTarget::DominanceDecision { .. } => None,
+        }
+    }
+
+    /// Resolve a challenge's bond escrow: release it (bond returned to the
+    /// challenger) or slash it (bond forfeited).
+    fn resolve_challenge_escrow(
+        &mut self,
+        challenge_id: &ChallengeId,
+        forfeit: bool,
+    ) -> Result<(), String> {
+        let Some(escrow_id) = self.challenge_escrows.get(challenge_id) else {
+            // Challenges created before challenge escrows existed have no
+            // bond escrow; nothing to resolve.
+            return Ok(());
+        };
+        let escrow = self
+            .escrow_records
+            .get_mut(escrow_id)
+            .ok_or_else(|| format!("challenge escrow {} not found", escrow_id))?;
+        if forfeit {
+            arc_reward_engine::slash_escrow(escrow).map_err(|e| e.to_string())
+        } else {
+            arc_reward_engine::release_escrow(escrow, self.current_epoch)
+                .map_err(|e| e.to_string())
+        }
     }
 
     /// Begin review of an open challenge.
@@ -639,16 +747,15 @@ impl SimulatorState {
             .ok_or_else(|| format!("challenge {} not found", challenge_id))?;
         arc_challenge_engine::uphold_challenge(challenge)
             .map_err(|e| e.to_string())?;
+        let challenger = challenge.challenger;
+        let target = Self::challenge_target_block(&challenge.target);
 
-        // Identify the target block.
-        let target_block_id = match &challenge.target {
-            ChallengeTarget::Block { block_id } => *block_id,
-            ChallengeTarget::Attestation { block_id, .. } => *block_id,
-            ChallengeTarget::Attribution { block_id, .. } => *block_id,
-            ChallengeTarget::DominanceDecision { .. } => {
-                // Dominance challenges don't invalidate a specific block.
-                return Ok(());
-            }
+        // The challenge succeeded: return the challenger's bond.
+        self.resolve_challenge_escrow(challenge_id, false)?;
+
+        let Some(target_block_id) = target else {
+            // Dominance challenges don't invalidate a specific block.
+            return Ok(());
         };
 
         // Invalidate the target block.
@@ -660,13 +767,40 @@ impl SimulatorState {
         block_lifecycle::invalidate_block(block)
             .map_err(|e| e.to_string())?;
 
-        // Slash the block's escrow.
-        if let Some(escrow_id) = self.block_escrows.get(&target_block_id) {
-            if let Some(escrow) = self.escrow_records.get_mut(escrow_id) {
-                arc_reward_engine::slash_escrow(escrow)
-                    .map_err(|e| e.to_string())?;
+        // Slash all still-held escrows of the block (proposer bond and
+        // survival tranche; a released provisional tranche is the accepted
+        // fraud exposure and is not clawed back).
+        let mut slashed_total: u64 = 0;
+        if let Some(escrow_ids) = self.block_escrows.get(&target_block_id) {
+            for escrow_id in escrow_ids.clone() {
+                if let Some(escrow) = self.escrow_records.get_mut(&escrow_id) {
+                    if escrow.status == EscrowStatus::Held {
+                        arc_reward_engine::slash_escrow(escrow)
+                            .map_err(|e| e.to_string())?;
+                        slashed_total += escrow.amount.as_u64();
+                    }
+                }
             }
         }
+
+        // Distribute the slashed funds: a configured fraction to the
+        // challenger, the residual burned. Recorded for auditability.
+        let (challenger_payout, burned) = arc_reward_engine::compute_slash_distribution(
+            TokenAmount::new(slashed_total),
+            &self.reward_config,
+        );
+        self.slash_distributions.insert(
+            *challenge_id,
+            SlashDistribution {
+                challenge_id: *challenge_id,
+                block_id: target_block_id,
+                slashed_amount: TokenAmount::new(slashed_total),
+                challenger,
+                challenger_payout,
+                burned,
+                epoch: self.current_epoch,
+            },
+        );
 
         // Remove from validated outcomes (invalidated blocks are no longer
         // protocol truth for frontier purposes).
@@ -697,8 +831,8 @@ impl SimulatorState {
         Ok(())
     }
 
-    /// Reject a challenge: the target block is preserved, the challenger
-    /// loses their bond (bond distribution deferred to later phases).
+    /// Reject a challenge: the target block is preserved and the challenger
+    /// forfeits their bond (escrow slashed).
     pub fn reject_challenge(
         &mut self,
         challenge_id: &ChallengeId,
@@ -708,7 +842,29 @@ impl SimulatorState {
             .get_mut(challenge_id)
             .ok_or_else(|| format!("challenge {} not found", challenge_id))?;
         arc_challenge_engine::reject_challenge(challenge)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+
+        // The challenge failed: the challenger loses the bond.
+        self.resolve_challenge_escrow(challenge_id, true)
+    }
+
+    /// Expire a challenge that was not adjudicated in time.
+    ///
+    /// The challenger's bond is returned: expiry means the protocol failed
+    /// to adjudicate, not that the challenge was wrong. Punishing unresolved
+    /// challenges would chill challenging.
+    pub fn expire_challenge(
+        &mut self,
+        challenge_id: &ChallengeId,
+    ) -> Result<(), String> {
+        let challenge = self
+            .challenges
+            .get_mut(challenge_id)
+            .ok_or_else(|| format!("challenge {} not found", challenge_id))?;
+        arc_challenge_engine::expire_challenge(challenge)
+            .map_err(|e| e.to_string())?;
+
+        self.resolve_challenge_escrow(challenge_id, false)
     }
 
     // -----------------------------------------------------------------------
@@ -864,14 +1020,48 @@ impl SimulatorState {
         self.validated_outcomes.get(block_id)
     }
 
-    /// Get the escrow record for a block.
+    /// Get the proposer-bond escrow record for a block.
     pub fn block_escrow(
         &self,
         block_id: &BlockId,
     ) -> Option<&EscrowRecord> {
+        self.block_escrow_records(block_id)
+            .into_iter()
+            .find(|e| e.kind == EscrowKind::ProposerBond)
+    }
+
+    /// Get all escrow records for a block (bond and reward tranches),
+    /// in creation order.
+    pub fn block_escrow_records(
+        &self,
+        block_id: &BlockId,
+    ) -> Vec<&EscrowRecord> {
         self.block_escrows
             .get(block_id)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|eid| self.escrow_records.get(eid))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the challenger-bond escrow record for a challenge.
+    pub fn challenge_escrow(
+        &self,
+        challenge_id: &ChallengeId,
+    ) -> Option<&EscrowRecord> {
+        self.challenge_escrows
+            .get(challenge_id)
             .and_then(|eid| self.escrow_records.get(eid))
+    }
+
+    /// Get the slash distribution recorded for an upheld challenge.
+    pub fn slash_distribution(
+        &self,
+        challenge_id: &ChallengeId,
+    ) -> Option<&SlashDistribution> {
+        self.slash_distributions.get(challenge_id)
     }
 }
 

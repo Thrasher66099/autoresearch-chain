@@ -556,16 +556,41 @@ fn test_challenge_upheld_invalidates_block() {
     let result = run_ok(&["--state", state_str, "show-challenge", &challenge_id]);
     assert_eq!(result["status"], "UnderReview");
 
-    // Uphold: UnderReview -> Upheld, target block invalidated.
+    // Uphold: UnderReview -> Upheld, target block invalidated. The slashed
+    // proposer bond (500) and survival tranche (800) are distributed:
+    // 50% to the challenger, residual burned.
     let result = run_ok(&["--state", state_str, "uphold-challenge", &challenge_id]);
     assert_eq!(result["status"], "challenge_upheld");
+    let dist = &result["slash_distribution"];
+    assert_eq!(dist["slashed_amount"], 1300);
+    assert_eq!(dist["challenger_payout"], 650);
+    assert_eq!(dist["burned"], 650);
+
+    // show-challenge reflects the upheld status, the released challenger
+    // bond, and the slash distribution.
     let result = run_ok(&["--state", state_str, "show-challenge", &challenge_id]);
     assert_eq!(result["status"], "Upheld");
+    assert_eq!(result["challenger_escrow"]["status"], "Released");
+    assert_eq!(result["slash_distribution"]["challenger_payout"], 650);
 
     // Block is invalidated and its escrow slashed.
     let result = run_ok(&["--state", state_str, "show-block", &block_id]);
     assert_eq!(result["derived_validity"], "DirectInvalid");
     assert_eq!(result["escrow"]["status"], "Slashed");
+    // All held escrows (bond + survival tranche) slashed; the provisional
+    // tranche was released at acceptance and is not clawed back.
+    let escrows = result["escrows"].as_array().unwrap();
+    assert_eq!(escrows.len(), 3);
+    let status_of = |kind: &str| {
+        escrows
+            .iter()
+            .find(|e| e["kind"] == kind)
+            .unwrap_or_else(|| panic!("no {} escrow", kind))["status"]
+            .clone()
+    };
+    assert_eq!(status_of("ProposerBond"), "Slashed");
+    assert_eq!(status_of("SurvivalReward"), "Slashed");
+    assert_eq!(status_of("ProvisionalReward"), "Released");
 
     // Frontier reverts: the invalidated block is no longer canonical.
     let result = run_ok(&["--state", state_str, "show-frontier", &hex_id(1)]);
@@ -586,17 +611,43 @@ fn test_challenge_rejected_preserves_block() {
 
     run_ok(&["--state", state_str, "begin-review", &challenge_id]);
 
-    // Reject: UnderReview -> Rejected, target block untouched.
+    // Reject: UnderReview -> Rejected, target block untouched, challenger
+    // bond forfeited.
     let result = run_ok(&["--state", state_str, "reject-challenge", &challenge_id]);
     assert_eq!(result["status"], "challenge_rejected");
     let result = run_ok(&["--state", state_str, "show-challenge", &challenge_id]);
     assert_eq!(result["status"], "Rejected");
+    assert_eq!(result["challenger_escrow"]["status"], "Slashed");
+    assert!(result["slash_distribution"].is_null());
 
     // Block remains valid and canonical.
     let result = run_ok(&["--state", state_str, "show-block", &block_id]);
     assert_eq!(result["derived_validity"], "DirectValid");
     let result = run_ok(&["--state", state_str, "show-frontier", &hex_id(1)]);
     assert_eq!(result["canonical_frontier"], block_id);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_challenge_expired_returns_bond() {
+    let dir = test_dir("challenge_expired");
+    let state = dir.join("state.json");
+    let state_str = state.to_str().unwrap();
+
+    run_node(&["init", state_str]);
+    let (block_id, _) = setup_domain_with_block(&dir, state_str);
+    let challenge_id = open_challenge(&dir, state_str, &block_id);
+
+    // Expire the unresolved challenge: bond returned, block untouched.
+    let result = run_ok(&["--state", state_str, "expire-challenge", &challenge_id]);
+    assert_eq!(result["status"], "challenge_expired");
+    let result = run_ok(&["--state", state_str, "show-challenge", &challenge_id]);
+    assert_eq!(result["status"], "Expired");
+    assert_eq!(result["challenger_escrow"]["status"], "Released");
+
+    let result = run_ok(&["--state", state_str, "show-block", &block_id]);
+    assert_eq!(result["derived_validity"], "DirectValid");
 
     let _ = fs::remove_dir_all(&dir);
 }

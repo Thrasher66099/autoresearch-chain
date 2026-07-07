@@ -950,13 +950,32 @@ class TestChallengeLifecycle:
         result = client.begin_challenge_review(challenge_id)
         assert result["status"] == "challenge_under_review"
 
-        # Uphold challenge.
+        # Uphold challenge. The slashed proposer bond (500) plus survival
+        # reward tranche (800) are distributed: 50% to the challenger,
+        # residual burned.
         result = client.uphold_challenge(challenge_id)
         assert result["status"] == "challenge_upheld"
+        dist = result["slash_distribution"]
+        assert dist["slashed_amount"] == 1300
+        assert dist["challenger_payout"] == 650
+        assert dist["burned"] == 650
+
+        # The challenger's bond is returned; net outcome is positive
+        # (bond back + payout).
+        challenge = client.show_challenge(challenge_id)
+        assert challenge["challenger_escrow"]["status"] == "Released"
+        assert challenge["slash_distribution"]["challenger_payout"] == 650
 
         # Verify block is invalidated.
         block_detail = client.show_block(block_id)
         assert block_detail["derived_validity"] == "DirectInvalid"
+
+        # The proposer keeps only the released provisional tranche; the
+        # bond and survival tranche are slashed.
+        escrows = {e["kind"]: e["status"] for e in block_detail["escrows"]}
+        assert escrows["ProposerBond"] == "Slashed"
+        assert escrows["SurvivalReward"] == "Slashed"
+        assert escrows["ProvisionalReward"] == "Released"
 
         # Frontier reverts to None (no valid blocks — genesis is the parent
         # for new proposals, but isn't a regular block in the frontier).
@@ -1001,6 +1020,12 @@ class TestChallengeLifecycle:
         result = client.reject_challenge(challenge_id)
         assert result["status"] == "challenge_rejected"
 
+        # The frivolous challenger forfeits the bond; nothing was slashed
+        # from the proposer.
+        challenge = client.show_challenge(challenge_id)
+        assert challenge["challenger_escrow"]["status"] == "Slashed"
+        assert "slash_distribution" not in challenge
+
         # Block should still be valid.
         block_detail = client.show_block(block_id)
         assert block_detail["derived_validity"] == "DirectValid"
@@ -1008,6 +1033,41 @@ class TestChallengeLifecycle:
         # Frontier should still point to the block.
         frontier = client.show_frontier(domain_id)
         assert frontier["canonical_frontier"] == block_id
+
+    def test_challenge_expired_returns_bond(
+        self,
+        arc_node_bin: str,
+        state_path: str,
+        store_dir: Path,
+        client: ArcNodeClient,
+    ):
+        """Expired (unadjudicated) challenge: bond returned, block untouched."""
+        domain_id = activate_domain(client)
+        block_id = submit_and_accept_block(client, domain_id, store_dir)
+
+        challenge_id = generate_id(
+            hex_id(99).encode("utf-8"),
+            block_id.encode("utf-8"),
+            b"1700003002",
+        )
+        client.open_challenge({
+            "challenge_id": challenge_id,
+            "challenge_type": "BlockReplay",
+            "target": {"Block": {"block_id": block_id}},
+            "challenger": hex_id(99),
+            "bond": 200,
+            "evidence_ref": hex_id(82),
+        })
+
+        result = client.expire_challenge(challenge_id)
+        assert result["status"] == "challenge_expired"
+
+        challenge = client.show_challenge(challenge_id)
+        assert challenge["status"] == "Expired"
+        assert challenge["challenger_escrow"]["status"] == "Released"
+
+        block_detail = client.show_block(block_id)
+        assert block_detail["derived_validity"] == "DirectValid"
 
     def test_challenger_runner_open_challenge(
         self,

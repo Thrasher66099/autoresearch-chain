@@ -167,10 +167,10 @@ Phase 0 is substantially complete. The Rust workspace contains 10 crates (~10,60
 | `domain-engine` | Implemented | Genesis activation state machine, RTS-1 conformance, domain registry |
 | `fork-engine` | Implemented | Fork families, metric-based dominance, frontier selection, invalidation handling |
 | `challenge-engine` | Partial | State machine implemented; economics, escalation, remedy application deferred |
-| `reward-engine` | Partial | Escrow create/release/slash implemented; staged rewards, attribution distribution deferred |
+| `reward-engine` | Partial | Escrow create/release/slash, staged reward tranches (provisional at acceptance, survival at settlement), challenger bond escrow, and slash distribution (challenger payout + burned residual) implemented; integration/frontier/transfer reward stages and attribution distribution deferred |
 | `simulator` | Implemented | Integrated state machine composing all engines; 51 scenario tests; whole-state snapshot persistence (serde JSON) |
 | `storage-model` | Partial | Content-addressed artifact store (BLAKE3), ArtifactStore trait, InMemoryArtifactStore, evidence bundling, file-from-disk ingestion; Python-Rust hash agreement verified; materialization triggers and frontier assembly not yet implemented |
-| `node` | Partial | Phase 1 target; file-based state persistence, CLI transaction submission (17 write commands, including challenge adjudication), and state queries (5 read commands) implemented; event log / state-transition trace not yet implemented |
+| `node` | Partial | Phase 1 target; file-based state persistence, CLI transaction submission (18 write commands, including challenge adjudication and expiry), and state queries (5 read commands) implemented; event log / state-transition trace not yet implemented |
 | `cli` | Stub | Phase 1 target |
 
 ### Protocol-truth hardening
@@ -711,7 +711,7 @@ They are reasons to build in a way that allows change.
 
 ### Forward sequence
 
-1. Complete Phase 0 remaining items: challenge economics, staged rewards, storage-model references, successor-track creation, cross-domain effects.
+1. Complete Phase 0 remaining items: storage-model references, successor-track creation, cross-domain effects. (Challenge bond economics and provisional/survival staged rewards are implemented; later reward stages remain.)
 2. Complete local single-node runtime (Phase 1): transaction flow, state queries, CLI commands (persistence already implemented).
 3. Complete Python runner integration (Phase 2): connect challenger runner to local runtime; proposer and validator runners are connected with evidence manifest storage (evidence bundling, QMD genesis packaging, surface enforcement, and end-to-end pipeline tested).
 4. Implement frontier materialization and artifact resolution (Phase 3).

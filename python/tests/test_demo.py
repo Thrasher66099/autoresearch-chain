@@ -552,5 +552,31 @@ class TestRealComputationThroughProtocol:
         frontier = client.show_frontier(domain_id)
         assert frontier["canonical_frontier"] is None
 
+        # --- Phase 8: Verify the economics ---
+        # Fraud must be net-negative for the proposer and net-positive for
+        # the challenger.
+        dist = result["slash_distribution"]
+        challenge = client.show_challenge(challenge_id)
+
+        # Challenger: bond returned + payout > 0.
+        assert challenge["challenger_escrow"]["status"] == "Released"
+        challenger_net = dist["challenger_payout"]
+        assert challenger_net > 0
+
+        # Proposer: bond (500) and survival tranche slashed; only the
+        # provisional tranche was released. Net = provisional - bond < 0.
+        escrows = {e["kind"]: e for e in block_detail["escrows"]}
+        assert escrows["ProposerBond"]["status"] == "Slashed"
+        assert escrows["SurvivalReward"]["status"] == "Slashed"
+        assert escrows["ProvisionalReward"]["status"] == "Released"
+        proposer_net = (
+            escrows["ProvisionalReward"]["amount"]
+            - escrows["ProposerBond"]["amount"]
+        )
+        assert proposer_net < 0
+
+        # Slash accounting conserves: payout + burned == slashed.
+        assert dist["challenger_payout"] + dist["burned"] == dist["slashed_amount"]
+
         # Cleanup.
         shutil.rmtree(workspace, ignore_errors=True)

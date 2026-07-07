@@ -1926,3 +1926,219 @@ fn scenario_z_deep_ancestry_invalidation() {
     // Frontier must be cleared.
     assert!(sim.canonical_frontier(&domain_id).is_none());
 }
+
+// =======================================================================
+// Scenarios AA-AF: Milestone A (challenge bond economics, staged rewards)
+// =======================================================================
+
+/// Open a standard BlockReplay challenge from participant 5 with bond 200.
+fn open_test_challenge(
+    sim: &mut SimulatorState,
+    challenge_n: u8,
+    block_id: BlockId,
+) -> ChallengeId {
+    let challenge_id = test_challenge_id(challenge_n);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::BlockReplay,
+        ChallengeTarget::Block { block_id },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    challenge_id
+}
+
+#[test]
+fn scenario_aa_acceptance_creates_staged_reward_tranches() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    let escrows = sim.block_escrow_records(&block_id);
+    assert_eq!(escrows.len(), 3);
+
+    // Proposer bond: held until settlement.
+    let bond = escrows
+        .iter()
+        .find(|e| e.kind == EscrowKind::ProposerBond)
+        .unwrap();
+    assert_eq!(bond.status, EscrowStatus::Held);
+    assert_eq!(bond.amount, TokenAmount::new(500));
+
+    // Provisional tranche: released immediately at acceptance
+    // (default config: 20% of 1000 = 200).
+    let provisional = escrows
+        .iter()
+        .find(|e| e.kind == EscrowKind::ProvisionalReward)
+        .unwrap();
+    assert_eq!(provisional.status, EscrowStatus::Released);
+    assert_eq!(provisional.amount, TokenAmount::new(200));
+
+    // Survival tranche: held until the challenge window closes.
+    let survival = escrows
+        .iter()
+        .find(|e| e.kind == EscrowKind::SurvivalReward)
+        .unwrap();
+    assert_eq!(survival.status, EscrowStatus::Held);
+    assert_eq!(survival.amount, TokenAmount::new(800));
+    assert!(survival.release_epoch > survival.created_epoch);
+}
+
+#[test]
+fn scenario_ab_settlement_releases_bond_and_survival_tranche() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+    sim.close_challenge_window(&block_id).unwrap();
+
+    for _ in 0..5 {
+        sim.advance_epoch();
+    }
+    sim.settle_block(&block_id).unwrap();
+
+    // Every escrow for the block is now released: the proposer received
+    // bond back + full reward.
+    for escrow in sim.block_escrow_records(&block_id) {
+        assert_eq!(
+            escrow.status,
+            EscrowStatus::Released,
+            "escrow kind {:?} should be released after settlement",
+            escrow.kind
+        );
+    }
+}
+
+#[test]
+fn scenario_ac_upheld_challenge_pays_challenger_and_burns_residual() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    let challenge_id = open_test_challenge(&mut sim, 1, block_id);
+
+    // Challenger bond is escrowed while the challenge is pending.
+    let bond_escrow = sim.challenge_escrow(&challenge_id).unwrap();
+    assert_eq!(bond_escrow.kind, EscrowKind::ChallengerBond);
+    assert_eq!(bond_escrow.status, EscrowStatus::Held);
+    assert_eq!(bond_escrow.amount, TokenAmount::new(200));
+
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Challenger bond returned.
+    let bond_escrow = sim.challenge_escrow(&challenge_id).unwrap();
+    assert_eq!(bond_escrow.status, EscrowStatus::Released);
+
+    // Proposer bond (500) and survival tranche (800) slashed; the released
+    // provisional tranche (200) is not clawed back.
+    let dist = sim.slash_distribution(&challenge_id).unwrap();
+    assert_eq!(dist.slashed_amount, TokenAmount::new(1300));
+    assert_eq!(dist.challenger, test_participant_id(5));
+    // Default payout: 50% to the challenger, residual burned.
+    assert_eq!(dist.challenger_payout, TokenAmount::new(650));
+    assert_eq!(dist.burned, TokenAmount::new(650));
+    assert_eq!(
+        dist.challenger_payout.as_u64() + dist.burned.as_u64(),
+        dist.slashed_amount.as_u64()
+    );
+
+    // Economics: the successful challenger nets a positive payout
+    // (bond returned + payout > 0); the dishonest proposer nets a loss
+    // (provisional 200 received, bond 500 lost: net -300).
+    assert!(dist.challenger_payout.as_u64() > 0);
+    let provisional = sim.reward_config.provisional_reward_amount().as_u64();
+    assert!(provisional < 500, "bond must exceed provisional exposure");
+}
+
+#[test]
+fn scenario_ad_rejected_challenge_forfeits_challenger_bond() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    let challenge_id = open_test_challenge(&mut sim, 1, block_id);
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.reject_challenge(&challenge_id).unwrap();
+
+    // Frivolous challenger loses the bond.
+    let bond_escrow = sim.challenge_escrow(&challenge_id).unwrap();
+    assert_eq!(bond_escrow.status, EscrowStatus::Slashed);
+
+    // No slash distribution: nothing was taken from the proposer.
+    assert!(sim.slash_distribution(&challenge_id).is_none());
+
+    // Block escrows untouched (bond + survival still held, provisional
+    // released).
+    let escrows = sim.block_escrow_records(&block_id);
+    assert!(escrows
+        .iter()
+        .all(|e| e.status != EscrowStatus::Slashed));
+}
+
+#[test]
+fn scenario_ae_expired_challenge_returns_challenger_bond() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    let challenge_id = open_test_challenge(&mut sim, 1, block_id);
+    sim.expire_challenge(&challenge_id).unwrap();
+
+    // Unadjudicated challenge: bond returned, not forfeited.
+    assert_eq!(
+        sim.challenges[&challenge_id].status,
+        ChallengeStatus::Expired
+    );
+    let bond_escrow = sim.challenge_escrow(&challenge_id).unwrap();
+    assert_eq!(bond_escrow.status, EscrowStatus::Released);
+
+    // Block untouched.
+    assert!(sim
+        .block_escrow_records(&block_id)
+        .iter()
+        .all(|e| e.status != EscrowStatus::Slashed));
+}
+
+#[test]
+fn scenario_af_bond_below_provisional_exposure_rejected_at_acceptance() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Default provisional tranche is 200. A bond of 100 would make fraud
+    // net-positive even when caught, so acceptance must fail.
+    let mut block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    block.bond = TokenAmount::new(100);
+    let block_id = block.id;
+
+    sim.submit_block(block).unwrap();
+    let assigned = sim.assign_validators(&block_id).unwrap();
+    for v in &assigned {
+        sim.record_attestation(ValidationAttestation {
+            block_id,
+            validator: *v,
+            vote: ValidatorVote::Pass,
+            observed_delta: Some(MetricValue::new(0.015)),
+            replay_evidence_ref: test_artifact_hash(70),
+            timestamp: 1700002000,
+        })
+        .unwrap();
+    }
+
+    let err = sim.evaluate_block(&block_id).unwrap_err();
+    assert!(
+        err.contains("fraud-exposure invariant"),
+        "expected fraud-exposure error, got: {}",
+        err
+    );
+}

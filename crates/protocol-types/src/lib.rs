@@ -281,6 +281,7 @@ mod tests {
         let escrow = EscrowRecord {
             id: EscrowId::ZERO,
             block_id: BlockId::ZERO,
+            kind: EscrowKind::ProposerBond,
             beneficiary: ParticipantId::ZERO,
             amount: TokenAmount::new(100),
             status: EscrowStatus::Held,
@@ -423,6 +424,7 @@ mod tests {
         let escrow = EscrowRecord {
             id: EscrowId::ZERO,
             block_id: BlockId::ZERO,
+            kind: EscrowKind::ProposerBond,
             beneficiary: ParticipantId::ZERO,
             amount: TokenAmount::new(100),
             status: EscrowStatus::Held,
