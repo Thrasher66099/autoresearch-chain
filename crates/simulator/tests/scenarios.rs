@@ -1183,8 +1183,12 @@ fn scenario_r_pass_without_observed_delta_does_not_count_toward_acceptance() {
     // No validated outcome should exist.
     assert!(sim.validated_outcome(&block_id).is_none());
 
-    // No escrow should exist.
-    assert!(sim.block_escrow(&block_id).is_none());
+    // Bond-at-submission: the bond escrow exists but is returned on
+    // rejection, and no reward tranches were created.
+    let escrows = sim.block_escrow_records(&block_id);
+    assert_eq!(escrows.len(), 1);
+    assert_eq!(escrows[0].kind, EscrowKind::ProposerBond);
+    assert_eq!(escrows[0].status, EscrowStatus::Released);
 }
 
 /// Phase 0.3c: When some Pass attestations have observed_delta and some
@@ -2306,4 +2310,89 @@ fn scenario_ah_unfunded_domain_keeps_legacy_behavior() {
     assert!(sim.domain_pool(&domain_id).is_none());
     // Top-up on an unfunded domain is refused.
     assert!(sim.top_up_pool(&domain_id, TokenAmount::new(1)).is_err());
+}
+
+// =======================================================================
+// Scenarios AI: bond-at-submission + attestation slashing (econ step 2)
+// =======================================================================
+
+#[test]
+fn scenario_ai_bond_committed_at_submission() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    sim.submit_block(block).unwrap();
+
+    // Bond escrow exists and is Held before any validation happened.
+    let escrows = sim.block_escrow_records(&block_id);
+    assert_eq!(escrows.len(), 1);
+    assert_eq!(escrows[0].kind, EscrowKind::ProposerBond);
+    assert_eq!(escrows[0].status, EscrowStatus::Held);
+}
+
+#[test]
+fn scenario_ai_validator_bonds_and_attestation_slashing() {
+    let mut sim_seed = SimulatorState::new();
+    sim_seed.validation_config.validator_bond = 400;
+    // Rebuild an active domain on the bonded config.
+    let genesis = valid_genesis_block();
+    let genesis_id = genesis.id;
+    let domain_id = genesis.domain_id;
+    sim_seed.submit_genesis(genesis).unwrap();
+    sim_seed.evaluate_conformance(&genesis_id).unwrap();
+    for i in 1..=3 {
+        sim_seed
+            .record_seed_validation(
+                &genesis_id,
+                SeedValidationRecord {
+                    validator: test_validator_id(i),
+                    vote: ValidatorVote::Pass,
+                    observed_score: Some(MetricValue::new(0.9300)),
+                    timestamp: 1700000000 + i as u64,
+                },
+            )
+            .unwrap();
+    }
+    sim_seed.finalize_activation(&genesis_id).unwrap();
+    sim_seed.register_validator_pool(ValidatorPool {
+        domain_id,
+        validators: (1..=10).map(test_validator_id).collect(),
+    });
+    let mut sim = sim_seed;
+
+    // Every registered validator posted a Held bond.
+    assert_eq!(sim.validator_bond_escrows.len(), 10);
+
+    // Accept a block, then challenge one validator's attestation.
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+    let assigned = sim.validator_assignments[&block_id].clone();
+    let dishonest = assigned[0];
+
+    let challenge_id = test_challenge_id(1);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::AttestationFraud,
+        ChallengeTarget::Attestation { block_id, validator: dishonest },
+        test_participant_id(5),
+        TokenAmount::new(200),
+        test_artifact_hash(80),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // The validator's registration bond is slashed and distributed;
+    // the block itself is untouched.
+    let bond_id = sim.validator_bond_escrows[&dishonest];
+    assert_eq!(sim.escrow_records[&bond_id].status, EscrowStatus::Slashed);
+    let dist = sim.slash_distribution(&challenge_id).unwrap();
+    assert_eq!(dist.slashed_amount, TokenAmount::new(400));
+    assert_eq!(dist.challenger_payout, TokenAmount::new(200));
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectValid);
+    assert!(sim
+        .block_escrow_records(&block_id)
+        .iter()
+        .all(|e| e.status != EscrowStatus::Slashed));
 }

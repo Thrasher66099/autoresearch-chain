@@ -129,7 +129,7 @@ default for unfunded test states only.
    in the simulator: reserve split at activation, debit at acceptance,
    arithmetic dormancy gate at submission, permissionless
    `top-up-pool`; unfunded domains keep legacy global-config behavior).
-2. Bond-at-submission + attestation slashing (closes calibration gaps).
+2. Bond-at-submission + attestation slashing — **implemented** (bond escrow committed in `submit_block`, released on rejection — slashing requires adjudication, never a vote tally; validators post registration bonds when `validator_bond > 0`, slashed by upheld attestation challenges with the standard challenger payout split, leaving the block itself governed by its own challenges).
 3. Proposer-fee distribution to assigned validators.
 4. Emissions subsidy accounting with matching + caps.
 5. Adversarial-sim scenarios: wash-mining, pool exhaustion, validator
