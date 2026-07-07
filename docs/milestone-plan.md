@@ -342,7 +342,22 @@ Deliverables:
   cross-language test vectors + a Python-signs/Rust-verifies integration
   test). Remaining for later: signing adjudication/registration commands
   (no actor field yet) and key management beyond flat files.
-- **E2 — Ordering layer:** the useful-work game does not order the chain; a
+- **E2/E3 — Ordering + networking: COMPLETE (2026-07), as explicit scaffolding.**
+  Single-sequencer PoA over plain HTTP (`arc-node serve` / `follow`):
+  every state mutation flows through one `apply_tx` dispatcher and a
+  hash-chained, authority-signed ordering log (JSONL beside the state
+  file). Followers fetch `/log`, verify chain + authority signature +
+  per-actor signatures on replay, and cross-check a canonical BLAKE3
+  state hash against the sequencer — divergence is a hard error.
+  Artifacts serve content-addressed via `/artifact`. Trust model stated
+  plainly: the authority can censor but cannot forge, reorder
+  undetectably, or fabricate actor signatures. libp2p/gossip and
+  permissionless ordering are deliberately deferred; the transaction and
+  state model do not change when the ordering layer is replaced.
+  Follow-ups: Python HTTP client, follower serving read endpoints,
+  sequencer rotation.
+
+- **E2 — Ordering layer (original goal):** the useful-work game does not order the chain; a
   deliberately boring mechanism does. Start with the simplest thing that is
   honest about its trust model (a small permissioned validator set / PoA
   federation), explicitly documented as temporary scaffolding to be replaced
