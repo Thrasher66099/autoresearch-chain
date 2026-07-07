@@ -864,3 +864,104 @@ fn test_list_blocks_domain_filter_no_match() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+// =======================================================================
+// E1: Ed25519 identity enforcement
+// =======================================================================
+
+#[test]
+fn test_signature_enforcement() {
+    let dir = test_dir("signatures");
+    let state = dir.join("state.json");
+    let state_str = state.to_str().unwrap();
+
+    // Init with signature enforcement.
+    let (_, stderr, success) =
+        run_node(&["--state", state_str, "init", "--require-signatures"]);
+    assert!(success, "init failed: {}", stderr);
+
+    // Unsigned genesis is refused.
+    let genesis_file = write_json(&dir, "genesis.json", &genesis_json());
+    let stderr = run_err(&["--state", state_str, "submit-genesis", &genesis_file]);
+    assert!(stderr.contains("requires signatures"), "stderr: {}", stderr);
+
+    // Sign with a real keypair; the proposer ID must be the public key.
+    let kp = arc_identity::Keypair::from_secret_bytes(&[7u8; 32]);
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{:02x}", x)).collect::<String>();
+    let proposer_hex = hex(&kp.public_bytes());
+
+    let mut genesis = genesis_json();
+    genesis["proposer"] = serde_json::json!(proposer_hex);
+    let message = arc_identity::genesis_message(
+        genesis["id"].as_str().unwrap(),
+        &proposer_hex,
+        genesis["timestamp"].as_u64().unwrap(),
+    );
+    genesis["signature"] = serde_json::json!(hex(&kp.sign(&message)));
+    let genesis_file = write_json(&dir, "genesis_signed.json", &genesis);
+    let result = run_ok(&["--state", state_str, "submit-genesis", &genesis_file]);
+    assert_eq!(result["genesis_id"], hex_id(1));
+
+    // A tampered payload fails verification (signature over old timestamp).
+    let mut bad = genesis.clone();
+    bad["id"] = serde_json::json!(hex_id(2));
+    bad["domain_id"] = serde_json::json!(hex_id(2));
+    let bad_file = write_json(&dir, "genesis_tampered.json", &bad);
+    let stderr = run_err(&["--state", state_str, "submit-genesis", &bad_file]);
+    assert!(stderr.contains("signature rejected"), "stderr: {}", stderr);
+
+    // A signature from the wrong key fails even when well-formed.
+    let other = arc_identity::Keypair::from_secret_bytes(&[8u8; 32]);
+    let mut wrong = genesis.clone();
+    wrong["id"] = serde_json::json!(hex_id(3));
+    wrong["signature"] = serde_json::json!(hex(&other.sign(&message)));
+    let wrong_file = write_json(&dir, "genesis_wrongkey.json", &wrong);
+    let stderr = run_err(&["--state", state_str, "submit-genesis", &wrong_file]);
+    assert!(stderr.contains("signature rejected"), "stderr: {}", stderr);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_signatures_optional_when_not_required() {
+    // Legacy mode: states initialized without --require-signatures accept
+    // unsigned payloads (all pre-E1 tests rely on this), but still verify
+    // any signature that IS present.
+    let dir = test_dir("signatures_optional");
+    let state = dir.join("state.json");
+    let state_str = state.to_str().unwrap();
+    run_node(&["init", state_str]);
+
+    // Unsigned works.
+    let genesis_file = write_json(&dir, "genesis.json", &genesis_json());
+    run_ok(&["--state", state_str, "submit-genesis", &genesis_file]);
+
+    // Present-but-invalid signature is still rejected.
+    let mut bad = genesis_json();
+    bad["id"] = serde_json::json!(hex_id(9));
+    bad["signature"] = serde_json::json!("00".repeat(64));
+    let bad_file = write_json(&dir, "genesis_badsig.json", &bad);
+    let stderr = run_err(&["--state", state_str, "submit-genesis", &bad_file]);
+    assert!(stderr.contains("signature rejected"), "stderr: {}", stderr);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_keygen_produces_usable_identity() {
+    let dir = test_dir("keygen");
+    let key_file = dir.join("key.json");
+
+    let (stdout, stderr, success) =
+        run_node(&["keygen", key_file.to_str().unwrap()]);
+    assert!(success, "keygen failed: {}", stderr);
+    let out: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(out["participant_id"].as_str().unwrap().len(), 64);
+
+    let key: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&key_file).unwrap()).unwrap();
+    assert_eq!(key["secret"].as_str().unwrap().len(), 64);
+    assert_eq!(key["public"], out["participant_id"]);
+
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -63,6 +63,7 @@ fn main() {
     match command {
         // Existing commands.
         "init" => cmd_init(cmd_args, &state_path),
+        "keygen" => commands::cmd_keygen(cmd_args),
         "inspect" => cmd_inspect(cmd_args, &state_path),
 
         // Write commands (mutate state).
@@ -131,7 +132,8 @@ fn print_usage() {
     eprintln!("Usage: arc-node [--state <path>] <command> [args...]");
     eprintln!();
     eprintln!("State management:");
-    eprintln!("  init [PATH]                      Create a fresh protocol state file");
+    eprintln!("  init [PATH] [--require-signatures]  Create a fresh protocol state file");
+    eprintln!("  keygen [out-file]                Generate an Ed25519 keypair (public key = participant ID)");
     eprintln!("  inspect [PATH]                   Display basic info about a saved state");
     eprintln!();
     eprintln!("Genesis / domain activation:");
@@ -175,8 +177,9 @@ fn print_usage() {
 }
 
 fn cmd_init(args: &[String], default_state_path: &PathBuf) {
-    // init accepts an optional positional path, or uses the --state path.
-    let path = if let Some(pos) = args.first() {
+    // init accepts an optional positional path and/or --require-signatures.
+    let require_signatures = args.iter().any(|a| a == "--require-signatures");
+    let path = if let Some(pos) = args.iter().find(|a| !a.starts_with("--")) {
         PathBuf::from(pos)
     } else {
         default_state_path.clone()
@@ -188,7 +191,11 @@ fn cmd_init(args: &[String], default_state_path: &PathBuf) {
         std::process::exit(1);
     }
 
-    let state = SimulatorState::new();
+    let mut state = SimulatorState::new();
+    state.require_signatures = require_signatures;
+    if require_signatures {
+        eprintln!("Signature enforcement: ON (actor-bearing submissions must be signed)");
+    }
     match persistence::save_state(&state, &path) {
         Ok(()) => {
             eprintln!("Created fresh state: {}", path.display());

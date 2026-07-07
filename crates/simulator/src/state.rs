@@ -100,6 +100,10 @@ pub struct SimulatorState {
     escrow_counter: u64,
     /// Metric direction per domain (cached from DomainSpec).
     pub metric_directions: HashMap<DomainId, MetricDirection>,
+    /// Whether actor-bearing submissions must carry a verified Ed25519
+    /// signature (enforced at the node boundary; set at init).
+    #[serde(default)]
+    pub require_signatures: bool,
 }
 
 impl SimulatorState {
@@ -127,6 +131,7 @@ impl SimulatorState {
             fork_family_counter: 0,
             escrow_counter: 0,
             metric_directions: HashMap::new(),
+            require_signatures: false,
         }
     }
 

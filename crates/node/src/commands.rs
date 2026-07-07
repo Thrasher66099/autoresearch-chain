@@ -80,6 +80,66 @@ fn parse_challenge_id(hex: &str) -> Result<ChallengeId, String> {
     Ok(ChallengeId::from_bytes(parse_hex_bytes(hex)?))
 }
 
+/// Load a payload JSON file as a raw value plus its optional detached
+/// `signature` field (128 hex chars = 64 bytes). The signature is a
+/// sibling of the payload fields and ignored by typed deserialization.
+fn load_signed_json(path: &str) -> Result<(serde_json::Value, Option<Vec<u8>>), String> {
+    let value: serde_json::Value = load_json_file(path)?;
+    let sig = match value.get("signature").and_then(|s| s.as_str()) {
+        None => None,
+        Some(hex) => {
+            if hex.len() != 128 {
+                return Err(format!(
+                    "signature must be 128 hex characters, got {}",
+                    hex.len()
+                ));
+            }
+            let mut bytes = vec![0u8; 64];
+            for (i, byte) in bytes.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+                    .map_err(|e| format!("invalid signature hex: {}", e))?;
+            }
+            Some(bytes)
+        }
+    };
+    Ok((value, sig))
+}
+
+/// Enforce the signature policy: when the state requires signatures the
+/// payload must carry one; any signature present is verified against the
+/// actor's ID (which is the Ed25519 public key).
+fn check_signature(
+    sim: &SimulatorState,
+    actor_hex: &str,
+    message: &[u8],
+    signature: &Option<Vec<u8>>,
+) -> Result<(), String> {
+    match signature {
+        None if sim.require_signatures => Err(format!(
+            "state requires signatures: unsigned submission from {}",
+            actor_hex
+        )),
+        None => Ok(()),
+        Some(sig) => {
+            let pk = parse_hex_bytes(actor_hex)?;
+            arc_identity::verify(&pk, message, sig)
+                .map_err(|e| format!("signature rejected for {}: {}", actor_hex, e))
+        }
+    }
+}
+
+fn jstr<'a>(v: &'a serde_json::Value, k: &str) -> &'a str {
+    v.get(k).and_then(|x| x.as_str()).unwrap_or("")
+}
+
+fn ju(v: &serde_json::Value, k: &str) -> u64 {
+    v.get(k).and_then(|x| x.as_u64()).unwrap_or(0)
+}
+
+fn jf(v: &serde_json::Value, k: &str) -> Option<f64> {
+    v.get(k).and_then(|x| x.as_f64())
+}
+
 /// Load state, apply a mutation, save state, and return a JSON result.
 fn load_mutate_save<F, R>(state_path: &Path, action: F) -> Result<R, String>
 where
@@ -112,15 +172,28 @@ pub fn cmd_submit_genesis(state_path: &Path, args: &[String]) {
         std::process::exit(1);
     });
 
-    let genesis: GenesisBlock = match load_json_file(json_file) {
-        Ok(g) => g,
+    let (raw, sig) = match load_signed_json(json_file) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("error: {}", e);
             std::process::exit(1);
         }
     };
+    let genesis: GenesisBlock = match serde_json::from_value(raw.clone()) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("error: cannot parse {}: {}", json_file, e);
+            std::process::exit(1);
+        }
+    };
 
     match load_mutate_save(state_path, |sim| {
+        let message = arc_identity::genesis_message(
+            jstr(&raw, "id"),
+            jstr(&raw, "proposer"),
+            ju(&raw, "timestamp"),
+        );
+        check_signature(sim, jstr(&raw, "proposer"), &message, &sig)?;
         let id = sim.submit_genesis(genesis)?;
         Ok(serde_json::json!({ "genesis_id": id }))
     }) {
@@ -174,15 +247,31 @@ pub fn cmd_record_seed_validation(state_path: &Path, args: &[String]) {
         }
     };
 
-    let record: SeedValidationRecord = match load_json_file(&args[1]) {
-        Ok(r) => r,
+    let (raw, sig) = match load_signed_json(&args[1]) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("error: {}", e);
             std::process::exit(1);
         }
     };
+    let record: SeedValidationRecord = match serde_json::from_value(raw.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: cannot parse {}: {}", &args[1], e);
+            std::process::exit(1);
+        }
+    };
 
+    let genesis_hex = args[0].clone();
     match load_mutate_save(state_path, |sim| {
+        let message = arc_identity::seed_validation_message(
+            &genesis_hex,
+            jstr(&raw, "validator"),
+            jstr(&raw, "vote"),
+            jf(&raw, "observed_score"),
+            ju(&raw, "timestamp"),
+        );
+        check_signature(sim, jstr(&raw, "validator"), &message, &sig)?;
         sim.record_seed_validation(&genesis_id, record)?;
         Ok(serde_json::json!({ "status": "seed_validation_recorded", "genesis_id": genesis_id }))
     }) {
@@ -266,15 +355,37 @@ pub fn cmd_submit_block(state_path: &Path, args: &[String]) {
         std::process::exit(1);
     });
 
-    let block: Block = match load_json_file(json_file) {
-        Ok(b) => b,
+    let (raw, sig) = match load_signed_json(json_file) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("error: {}", e);
             std::process::exit(1);
         }
     };
+    let block: Block = match serde_json::from_value(raw.clone()) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: cannot parse {}: {}", json_file, e);
+            std::process::exit(1);
+        }
+    };
 
     match load_mutate_save(state_path, |sim| {
+        let message = arc_identity::block_message(
+            jstr(&raw, "id"),
+            jstr(&raw, "domain_id"),
+            jstr(&raw, "parent_id"),
+            jstr(&raw, "proposer"),
+            jstr(&raw, "child_state_ref"),
+            jstr(&raw, "diff_ref"),
+            jf(&raw, "claimed_metric_delta").unwrap_or(0.0),
+            jstr(&raw, "evidence_bundle_hash"),
+            ju(&raw, "fee"),
+            ju(&raw, "bond"),
+            ju(&raw, "epoch_id"),
+            ju(&raw, "timestamp"),
+        );
+        check_signature(sim, jstr(&raw, "proposer"), &message, &sig)?;
         let block_id = sim.submit_block(block)?;
         Ok(serde_json::json!({ "block_id": block_id }))
     }) {
@@ -323,10 +434,17 @@ pub fn cmd_submit_attestation(state_path: &Path, args: &[String]) {
         std::process::exit(1);
     });
 
-    let attestation: ValidationAttestation = match load_json_file(json_file) {
-        Ok(a) => a,
+    let (raw, sig) = match load_signed_json(json_file) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let attestation: ValidationAttestation = match serde_json::from_value(raw.clone()) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: cannot parse {}: {}", json_file, e);
             std::process::exit(1);
         }
     };
@@ -334,6 +452,15 @@ pub fn cmd_submit_attestation(state_path: &Path, args: &[String]) {
     let block_id = attestation.block_id;
 
     match load_mutate_save(state_path, |sim| {
+        let message = arc_identity::attestation_message(
+            jstr(&raw, "block_id"),
+            jstr(&raw, "validator"),
+            jstr(&raw, "vote"),
+            jf(&raw, "observed_delta"),
+            jstr(&raw, "replay_evidence_ref"),
+            ju(&raw, "timestamp"),
+        );
+        check_signature(sim, jstr(&raw, "validator"), &message, &sig)?;
         sim.record_attestation(attestation)?;
         Ok(serde_json::json!({
             "status": "attestation_recorded",
@@ -489,15 +616,42 @@ pub fn cmd_open_challenge(state_path: &Path, args: &[String]) {
         std::process::exit(1);
     });
 
-    let params: OpenChallengeParams = match load_json_file(json_file) {
-        Ok(p) => p,
+    let (raw, sig) = match load_signed_json(json_file) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("error: {}", e);
             std::process::exit(1);
         }
     };
+    let params: OpenChallengeParams = match serde_json::from_value(raw.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: cannot parse {}: {}", json_file, e);
+            std::process::exit(1);
+        }
+    };
+
+    // The signed target is the block ID nested in the target variant
+    // (Block/Attestation/Attribution all carry one).
+    let target_hex = raw
+        .get("target")
+        .and_then(|t| t.as_object())
+        .and_then(|o| o.values().next())
+        .and_then(|inner| inner.get("block_id"))
+        .and_then(|b| b.as_str())
+        .unwrap_or("")
+        .to_string();
 
     match load_mutate_save(state_path, |sim| {
+        let message = arc_identity::challenge_message(
+            jstr(&raw, "challenge_id"),
+            jstr(&raw, "challenge_type"),
+            &target_hex,
+            jstr(&raw, "challenger"),
+            ju(&raw, "bond"),
+            jstr(&raw, "evidence_ref"),
+        );
+        check_signature(sim, jstr(&raw, "challenger"), &message, &sig)?;
         let id = sim.open_challenge(
             params.challenge_id,
             params.challenge_type,
@@ -654,5 +808,30 @@ pub fn cmd_reject_challenge(state_path: &Path, args: &[String]) {
             eprintln!("error: {}", e);
             std::process::exit(1);
         }
+    }
+}
+
+/// `keygen [out-file]`
+///
+/// Generate an Ed25519 keypair. The public key is the participant ID.
+/// Writes `{"secret": hex32, "public": hex32}` to the file (or stdout).
+pub fn cmd_keygen(args: &[String]) {
+    let kp = arc_identity::Keypair::generate();
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{:02x}", x)).collect::<String>();
+    let out = serde_json::json!({
+        "secret": hex(&kp.secret_bytes()),
+        "public": hex(&kp.public_bytes()),
+        "participant_id": hex(&kp.public_bytes()),
+    });
+    match args.first() {
+        Some(path) => {
+            if let Err(e) = std::fs::write(path, serde_json::to_string_pretty(&out).unwrap()) {
+                eprintln!("error: cannot write {}: {}", path, e);
+                std::process::exit(1);
+            }
+            eprintln!("Keypair written to {}", path);
+            println!("{}", serde_json::json!({ "participant_id": out["participant_id"] }));
+        }
+        None => print_json(&out),
     }
 }
