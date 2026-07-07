@@ -131,6 +131,7 @@ pub fn cmd_show_block(state_path: &Path, args: &[String]) {
 
     let derived_validity = state.derived_validity(&block_id);
     let escrow = state.block_escrow(&block_id);
+    let escrows = state.block_escrow_records(&block_id);
     let validated_outcome = state.validated_outcome(&block_id);
 
     let mut result = serde_json::json!({
@@ -138,8 +139,13 @@ pub fn cmd_show_block(state_path: &Path, args: &[String]) {
         "derived_validity": format!("{:?}", derived_validity),
     });
 
+    // Proposer bond escrow, kept under the historical `escrow` key.
     if let Some(escrow) = escrow {
         result["escrow"] = serde_json::to_value(escrow).unwrap();
+    }
+    // All escrows for the block (bond + reward tranches).
+    if !escrows.is_empty() {
+        result["escrows"] = serde_json::to_value(&escrows).unwrap();
     }
     if let Some(outcome) = validated_outcome {
         result["validated_outcome"] = serde_json::to_value(outcome).unwrap();
@@ -205,7 +211,17 @@ pub fn cmd_show_challenge(state_path: &Path, args: &[String]) {
         }
     };
 
-    print_json(challenge);
+    let mut result = serde_json::to_value(challenge).unwrap();
+    // Challenger bond escrow and, for upheld challenges, the slash
+    // distribution (challenger payout and burned residual).
+    if let Some(escrow) = state.challenge_escrow(&challenge_id) {
+        result["challenger_escrow"] = serde_json::to_value(escrow).unwrap();
+    }
+    if let Some(dist) = state.slash_distribution(&challenge_id) {
+        result["slash_distribution"] = serde_json::to_value(dist).unwrap();
+    }
+
+    print_json(&result);
 }
 
 /// `list-blocks [--domain <domain-id>]`

@@ -745,7 +745,7 @@ The protocol introduces the following objects:
 
 These objects formalize how new research domains are created, activated, and rooted.
 
-**Status note:** Research track standards and genesis block mechanics are specified at the protocol level and implemented in the Rust protocol core (genesis activation state machine, RTS-1 conformance checking, domain registry). The Python layer includes a QMD domain-specific genesis packager with content-addressed evidence bundling. Challenge economics, escalation, and successor-track creation are not yet implemented.
+**Status note:** Research track standards and genesis block mechanics are specified at the protocol level and implemented in the Rust protocol core (genesis activation state machine, RTS-1 conformance checking, domain registry). The Python layer includes a QMD domain-specific genesis packager with content-addressed evidence bundling. Challenge bond economics (challenger payout on upheld challenges, bond forfeiture on rejected ones) and the provisional/survival reward stages are implemented; challenge escalation, later reward stages, and successor-track creation are not yet implemented.
 
 ---
 

@@ -72,6 +72,15 @@ Not implemented (the gaps this plan closes):
 
 ## Milestone A — Complete the Incentive Spine
 
+**Status: COMPLETE (2026-07).** Challenger bond escrow with payout on upheld
+(50% of slashed funds by default, residual burned, recorded as a
+`SlashDistribution`), forfeiture on rejected, return on expired; staged
+provisional/survival reward tranches with the fraud-exposure invariant
+(`bond >= provisional`) enforced at acceptance. Exercised end-to-end in
+Rust scenario/integration tests and Python integration tests, including the
+real-computation fraud scenario asserting proposer net loss and challenger
+net gain. Defaults are placeholders pending Milestone C calibration.
+
 **Goal:** make the adversarial market economically real. Challenging must be
 profitable when correct and costly when wrong; rewards must pay for survival
 through falsification, not for claiming.

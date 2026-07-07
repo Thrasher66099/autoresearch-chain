@@ -973,6 +973,7 @@ fn h_escrow_record_serialization_determinism() {
     let e = EscrowRecord {
         id: EscrowId::from_bytes([1u8; 32]),
         block_id: test_block_id(1),
+        kind: EscrowKind::ProposerBond,
         beneficiary: test_participant_id(1),
         amount: TokenAmount::new(500),
         status: EscrowStatus::Held,

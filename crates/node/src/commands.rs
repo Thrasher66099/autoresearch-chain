@@ -577,8 +577,45 @@ pub fn cmd_uphold_challenge(state_path: &Path, args: &[String]) {
 
     match load_mutate_save(state_path, |sim| {
         sim.uphold_challenge(&challenge_id)?;
-        Ok(serde_json::json!({
+        let mut result = serde_json::json!({
             "status": "challenge_upheld",
+            "challenge_id": challenge_id,
+        });
+        // Include the slash distribution (challenger payout, burned
+        // residual) when the upheld challenge slashed a block.
+        if let Some(dist) = sim.slash_distribution(&challenge_id) {
+            result["slash_distribution"] = serde_json::to_value(dist)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(result)
+    }) {
+        Ok(result) => print_json(&result),
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `expire-challenge <challenge-id>`
+pub fn cmd_expire_challenge(state_path: &Path, args: &[String]) {
+    let hex = args.first().unwrap_or_else(|| {
+        eprintln!("error: expire-challenge requires a challenge ID (hex)");
+        std::process::exit(1);
+    });
+
+    let challenge_id = match parse_challenge_id(hex) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    match load_mutate_save(state_path, |sim| {
+        sim.expire_challenge(&challenge_id)?;
+        Ok(serde_json::json!({
+            "status": "challenge_expired",
             "challenge_id": challenge_id,
         }))
     }) {

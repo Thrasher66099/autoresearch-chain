@@ -238,6 +238,12 @@ class ArcNodeClient:
             ["--state", self.state_path, "reject-challenge", challenge_id]
         )
 
+    def expire_challenge(self, challenge_id: str) -> dict:
+        """Expire an unresolved challenge (challenger bond returned)."""
+        return self._run(
+            ["--state", self.state_path, "expire-challenge", challenge_id]
+        )
+
     # ------------------------------------------------------------------
     # Epoch
     # ------------------------------------------------------------------

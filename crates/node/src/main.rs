@@ -28,7 +28,8 @@
 //!   record-seed-validation, finalize-activation, register-validators,
 //!   submit-block, assign-validators, submit-attestation, evaluate-block,
 //!   close-challenge-window, settle-block, finalize-block, open-challenge,
-//!   begin-review, uphold-challenge, reject-challenge, advance-epoch
+//!   begin-review, uphold-challenge, reject-challenge, expire-challenge,
+//!   advance-epoch
 //! - State queries: list-domains, show-block, show-frontier,
 //!   show-challenge, list-blocks
 //!
@@ -81,6 +82,7 @@ fn main() {
         "begin-review" => commands::cmd_begin_challenge_review(&state_path, cmd_args),
         "uphold-challenge" => commands::cmd_uphold_challenge(&state_path, cmd_args),
         "reject-challenge" => commands::cmd_reject_challenge(&state_path, cmd_args),
+        "expire-challenge" => commands::cmd_expire_challenge(&state_path, cmd_args),
         "advance-epoch" => commands::cmd_advance_epoch(&state_path),
 
         // Read commands (query state).
@@ -151,8 +153,9 @@ fn print_usage() {
     eprintln!("Challenges:");
     eprintln!("  open-challenge <json-file>       Open a challenge");
     eprintln!("  begin-review <challenge-id>      Begin challenge review");
-    eprintln!("  uphold-challenge <challenge-id>   Uphold a challenge (invalidate target)");
+    eprintln!("  uphold-challenge <challenge-id>   Uphold a challenge (invalidate target, pay challenger)");
     eprintln!("  reject-challenge <challenge-id>   Reject a challenge (challenger loses bond)");
+    eprintln!("  expire-challenge <challenge-id>   Expire an unresolved challenge (bond returned)");
     eprintln!();
     eprintln!("Epoch:");
     eprintln!("  advance-epoch                    Advance to the next epoch");
