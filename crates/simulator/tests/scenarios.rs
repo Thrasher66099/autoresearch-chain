@@ -2142,3 +2142,42 @@ fn scenario_af_bond_below_provisional_exposure_rejected_at_acceptance() {
         err
     );
 }
+
+// =======================================================================
+// Scenario AG: frontier advances across generations by cumulative
+// validated improvement, not per-block delta
+// =======================================================================
+
+#[test]
+fn scenario_ag_child_with_smaller_delta_advances_frontier() {
+    let (mut sim, domain_id, genesis_id) = setup_active_domain();
+
+    // Generation 1: large improvement over the seed.
+    let block_a = make_block(10, genesis_id.as_block_id(), domain_id, 0.10);
+    let block_a_id = block_a.id;
+    submit_and_validate_with_delta(&mut sim, block_a, 0.10);
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_a_id));
+
+    // Generation 2: a child of the frontier with a smaller (but positive)
+    // delta. Its own delta (0.02) is below its parent's (0.10), but its
+    // cumulative improvement (0.12) is higher — it must become frontier.
+    let block_b = make_block(11, block_a_id, domain_id, 0.02);
+    let block_b_id = block_b.id;
+    submit_and_validate_with_delta(&mut sim, block_b, 0.02);
+    assert_eq!(
+        sim.canonical_frontier(&domain_id),
+        Some(block_b_id),
+        "child improving the chain must advance the frontier even when \
+         its per-block delta is smaller than its parent's"
+    );
+
+    // Cumulative truth surface agrees.
+    let cumulative = sim.cumulative_validated_delta(&block_b_id).unwrap();
+    assert!((cumulative.as_f64() - 0.12).abs() < 1e-9);
+
+    // A sibling fork off genesis with delta between the two cumulative
+    // values (0.05 < 0.12) must NOT displace the deeper chain.
+    let block_c = make_block(12, genesis_id.as_block_id(), domain_id, 0.05);
+    submit_and_validate_with_delta(&mut sim, block_c, 0.05);
+    assert_eq!(sim.canonical_frontier(&domain_id), Some(block_b_id));
+}

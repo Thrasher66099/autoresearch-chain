@@ -125,13 +125,17 @@ class ProposerRunner:
         manifest_bytes = evidence_bundle.to_manifest_bytes()
         evidence_bundle_hash = self.bundler.hash_bytes(manifest_bytes)
 
-        # Child state ref: BLAKE3 of the diff content hash.
-        # For Phase 2, this is the diff hash itself — full materialized
-        # state references are deferred to Phase 3.
-        child_state_ref = evidence_bundle.diff_hash
+        # Child state ref: the verified materialized-state manifest of the
+        # post-experiment codebase (from AutoresearchAdapter.capture_result).
+        # Anyone can materialize and hash-verify this state. Falls back to
+        # the evidence diff hash for legacy results without state capture.
+        child_state_ref = experiment_result.get(
+            "child_state_ref", evidence_bundle.diff_hash
+        )
 
-        # Diff ref: the diff hash from the evidence bundle.
-        diff_ref = evidence_bundle.diff_hash
+        # Diff ref: the structured state diff from the parent state to the
+        # child state, when available; otherwise the textual evidence diff.
+        diff_ref = experiment_result.get("diff_ref", evidence_bundle.diff_hash)
 
         # Generate a unique block ID.
         timestamp = int(time.time())

@@ -389,6 +389,195 @@ class TestRealComputationThroughProtocol:
         # Cleanup workspace.
         shutil.rmtree(workspace, ignore_errors=True)
 
+    def test_two_generations_build_on_materialized_frontier(self, tmp_path: Path):
+        """Generation 2 builds on generation 1's verified materialized state.
+
+        The Milestone B definition of done: the QMD flow runs two
+        generations of improvement where generation 2's workspace is
+        materialized from generation 1's accepted block, verified against
+        its child_state_ref commitment, with frozen surfaces intact —
+        and the full diff chain resolves from the genesis seed to the
+        final frontier state.
+        """
+        arc_node_bin = find_arc_node()
+
+        from arc_runner.autoresearch_adapter import AutoresearchAdapter
+        from arc_runner.client import ArcNodeClient
+        from arc_runner.domains import prepare_genesis
+        from arc_runner.domains.qmd_experiment import (
+            extend_diversity_vocabulary,
+            persist_best_config,
+        )
+        from arc_runner.domains.qmd_query_expansion import QMDGenesisPackager
+        from arc_runner.materialize import resolve_diff_chain
+        from arc_runner.proposer import ProposerConfig, ProposerRunner
+        from arc_runner.validator import ValidatorConfig, ValidatorRunner
+
+        store_dir = tmp_path / "artifacts"
+        store_dir.mkdir()
+        state_path = str(tmp_path / "state.json")
+        proposer_id = hex_id(1)
+        bundler = EvidenceBundler(store_dir)
+
+        # --- Activate domain (same boilerplate as single-generation test) ---
+        client = ArcNodeClient(state_path, arc_node_bin)
+        client.init()
+        fixtures = _fixtures_dir()
+        packager = QMDGenesisPackager(fixtures, store_dir)
+        raw_genesis = packager.package()
+        seed_result = run_evaluation(str(fixtures), BASELINE_CONFIG)
+        seed_score = seed_result["reward_score"]
+        raw_genesis["seed_score"] = seed_score
+        genesis = prepare_genesis(raw_genesis, proposer_id)
+        client.submit_genesis(genesis)
+        client.evaluate_conformance(genesis["id"])
+        for i in range(1, 4):
+            client.record_seed_validation(genesis["id"], {
+                "validator": hex_id(i),
+                "vote": "Pass",
+                "observed_score": seed_score,
+                "timestamp": 1700000000 + i,
+            })
+        client.finalize_activation(genesis["id"])
+        client.register_validators({
+            "domain_id": genesis["domain_id"],
+            "validators": [hex_id(i) for i in range(1, 11)],
+        })
+        domain_id = genesis["domain_id"]
+        seed_state_ref = raw_genesis["seed_codebase_state_ref"]
+
+        adapter = AutoresearchAdapter(raw_genesis, store_dir)
+        proposer = ProposerRunner(ProposerConfig(
+            node_binary=arc_node_bin,
+            state_path=state_path,
+            store_dir=str(store_dir),
+            domain_id=domain_id,
+            proposer_id=proposer_id,
+            genesis_id=genesis["id"],
+            bond=500,
+            fee=10,
+        ))
+
+        def validate_and_accept(block_id: str, workspace: str, claimed: float,
+                                delta: float) -> None:
+            """All assigned validators replay in the given workspace."""
+            assigned = client.assign_validators(block_id)["assigned_validators"]
+            block_detail = client.show_block(block_id)
+            for validator_hex in assigned:
+                validator = ValidatorRunner(ValidatorConfig(
+                    node_binary=arc_node_bin,
+                    state_path=state_path,
+                    store_dir=str(store_dir),
+                    domain_id=domain_id,
+                    validator_id=validator_hex,
+                ))
+                evidence_info = validator.fetch_evidence(block_detail)
+                assert evidence_info["available"] is True
+                replay = replay_and_verify(
+                    workspace=workspace,
+                    evidence_manifest=evidence_info["manifest"],
+                    bundler=bundler,
+                    claimed_score=claimed,
+                )
+                assert replay["vote"] == "Pass"
+                replay_ref = bundler.hash_bytes(
+                    json.dumps(replay, sort_keys=True).encode("utf-8")
+                )
+                validator.submit_attestation(
+                    block_id, replay["vote"], delta, replay_ref
+                )
+            assert client.evaluate_block(block_id)["outcome"] == "Accepted"
+
+        # =============== Generation 1 ===============
+        workspace1 = adapter.pull_frontier()
+        adapter.enforce_surfaces(workspace1)
+        gen1_training = run_training(workspace1)
+        gen1_score = gen1_training["best_score"]
+        assert gen1_score > seed_score
+
+        # Commit the winning config into the codebase (search surface) so
+        # the improvement is part of the block's materialized state.
+        persist_best_config(workspace1, gen1_training["best_config"])
+
+        gen1_result = adapter.capture_result(workspace1, seed_score)
+        assert gen1_result["parent_state_ref"] == seed_state_ref
+        # The state changed (best_config.json added), so the child state
+        # is a new reference with a real diff.
+        assert gen1_result["child_state_ref"] != seed_state_ref
+        assert "diff_ref" in gen1_result
+
+        parent_id = proposer.get_frontier_parent()
+        block1_id = proposer.submit_block(parent_id, gen1_result)["block_id"]
+        validate_and_accept(
+            block1_id, workspace1, gen1_result["score"], gen1_result["delta"]
+        )
+        assert client.show_frontier(domain_id)["canonical_frontier"] == block1_id
+
+        # Settle generation 1.
+        client.close_challenge_window(block1_id)
+        for _ in range(5):
+            client.advance_epoch()
+        client.settle_block(block1_id)
+        client.finalize_block(block1_id)
+
+        # The block carries the real state refs, not evidence placeholders.
+        block1 = client.show_block(block1_id)["block"]
+        assert block1["child_state_ref"] == gen1_result["child_state_ref"]
+        assert block1["diff_ref"] == gen1_result["diff_ref"]
+
+        # =============== Generation 2 ===============
+        # Pull the frontier block's state — verified materialization, not
+        # a genesis extraction.
+        gen1_state_ref = block1["child_state_ref"]
+        workspace2 = adapter.pull_frontier(state_ref=gen1_state_ref)
+
+        # Frozen surfaces survived the diff chain.
+        adapter.enforce_surfaces(workspace2)
+
+        # Generation 1's discovery is present in the pulled state.
+        root2 = find_codebase_root(workspace2)
+        assert (root2 / "configs" / "best_config.json").exists()
+
+        # Agent edit on the search surface: extend the diversity vocabulary
+        # in train.py. The frozen reward caps diversity at 30 unique terms;
+        # the shipped vocabulary is too small to saturate it, so a larger
+        # vocabulary is a genuine, replayable improvement.
+        extend_diversity_vocabulary(workspace2)
+
+        gen2_training = run_training(workspace2)
+        gen2_score = gen2_training["best_score"]
+        assert gen2_score > gen1_score
+
+        persist_best_config(workspace2, gen2_training["best_config"])
+        gen2_result = adapter.capture_result(
+            workspace2, gen1_score, parent_state_ref=gen1_state_ref
+        )
+        assert gen2_result["child_state_ref"] != gen1_state_ref
+
+        parent_id = proposer.get_frontier_parent()
+        assert parent_id == block1_id
+        block2_id = proposer.submit_block(parent_id, gen2_result)["block_id"]
+        validate_and_accept(
+            block2_id, workspace2, gen2_result["score"], gen2_result["delta"]
+        )
+
+        # The frontier advanced to generation 2.
+        assert client.show_frontier(domain_id)["canonical_frontier"] == block2_id
+
+        # The full diff chain resolves from the genesis seed to the tip
+        # state — the chain is a usable versioned substrate, not just a
+        # ledger of claims.
+        block2 = client.show_block(block2_id)["block"]
+        resolved_tip = resolve_diff_chain(
+            [block1["diff_ref"], block2["diff_ref"]],
+            seed_state_ref,
+            bundler,
+        )
+        assert resolved_tip == block2["child_state_ref"]
+
+        shutil.rmtree(workspace1, ignore_errors=True)
+        shutil.rmtree(workspace2, ignore_errors=True)
+
     def test_real_replay_challenge_detects_fraud(self, tmp_path: Path):
         """Challenger replays a block with tampered score and gets it invalidated.
 

@@ -25,12 +25,11 @@ with real content-addressed artifact hashes, matching the Rust
 
 from __future__ import annotations
 
-import io
 import json
-import tarfile
 from pathlib import Path
 
-from arc_runner.evidence import EvidenceBundler, blake3_bytes, blake3_file
+from arc_runner.evidence import EvidenceBundler
+from arc_runner.materialize import snapshot_workspace
 
 
 class QMDGenesisPackager:
@@ -93,16 +92,19 @@ class QMDGenesisPackager:
         manifest = "\n".join(entries).encode("utf-8")
         return self.bundler.hash_bytes(manifest)
 
-    def _create_seed_tarball(self) -> str:
-        """Create a tarball of the entire finetune directory and store it."""
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for path in sorted(self.finetune_dir.rglob("*")):
-                if path.is_file():
-                    arcname = str(path.relative_to(self.finetune_dir.parent))
-                    tar.add(path, arcname=arcname)
-        tarball_bytes = buf.getvalue()
-        return self.bundler.hash_bytes(tarball_bytes)
+    def _snapshot_seed_state(self) -> str:
+        """Snapshot the finetune directory as a materialized-state manifest.
+
+        The seed codebase state is a content-addressed state manifest
+        (see ``arc_runner.materialize``), so proposers can pull it with
+        the same verified materialization path used for block frontier
+        states, and first-generation diffs can reference it as parent.
+        """
+        return snapshot_workspace(
+            self.finetune_dir,
+            self.bundler,
+            root_dir_name=self.finetune_dir.name,
+        )
 
     def _hash_dataset_files(self) -> dict:
         """Hash all dataset files in data/ and return split hashes."""
@@ -165,8 +167,9 @@ class QMDGenesisPackager:
         ]).encode("utf-8")
         seed_recipe_hash = self.bundler.hash_bytes(recipe_manifest)
 
-        # Seed codebase state (tarball of entire finetune dir).
-        seed_codebase_hash = self._create_seed_tarball()
+        # Seed codebase state (materialized-state manifest of the
+        # entire finetune dir).
+        seed_codebase_hash = self._snapshot_seed_state()
 
         # Dataset hashes.
         dataset_info = self._hash_dataset_files()

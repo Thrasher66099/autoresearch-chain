@@ -7,8 +7,11 @@ Python research execution runners for AutoResearch Chain.
 Phase 2 substantially complete. Proposer, validator, and challenger runners are
 implemented and exercised end-to-end against the Rust `arc-node` binary,
 including a real-computation demo (`python -m arc_runner.demo`) that runs the
-full protocol lifecycle on the QMD query-expansion domain. Frontier
-materialization (`arc_runner/materialize/`) remains a stub.
+full protocol lifecycle on the QMD query-expansion domain across two
+generations of improvement. Frontier materialization
+(`arc_runner/materialize/`) is implemented: content-addressed state
+manifests, structured state diffs, verified assembly, and diff-chain
+resolution.
 
 ## Package Layout
 
@@ -21,7 +24,7 @@ materialization (`arc_runner/materialize/`) remains a stub.
 | `arc_runner/autoresearch_adapter/` | Pulls frontier state, enforces frozen/search surfaces, captures results into evidence bundles |
 | `arc_runner/domains/` | Domain-specific experiment wrappers — QMD genesis packaging and training/eval/replay engine |
 | `arc_runner/evidence/` | Content-addressed (BLAKE3) evidence bundle creation, matching the Rust storage model |
-| `arc_runner/materialize/` | (Stub) Materialized code state generation and packaging |
+| `arc_runner/materialize/` | Materialized state snapshots (content-addressed manifests), structured state diffs, verified assembly, diff-chain resolution |
 | `arc_runner/demo.py` | End-to-end lifecycle demo with real computation (requires a built `arc-node`) |
 
 ## Requirements

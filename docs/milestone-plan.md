@@ -152,6 +152,34 @@ Python integration tests; all existing tests still pass.
 
 ## Milestone B — Frontier Materialization (Phase 3)
 
+**Status: COMPLETE (2026-07).** Implemented in `arc_runner/materialize`:
+content-addressed state manifests (sorted path → BLAKE3 hash, per-file
+storage), structured state diffs, verified assembly (a workspace that does
+not hash back to its reference raises `MaterializationError`), and
+diff-chain resolution from the genesis seed. Genesis seeds are packaged as
+manifests; `pull_frontier(state_ref)` materializes any block's
+`child_state_ref`; `capture_result` snapshots the post-experiment codebase
+and computes the parent diff. The QMD demo and tests run two generations
+where generation 2 builds on generation 1's verified state with frozen
+surfaces intact and the full diff chain resolving to the tip.
+
+Two deliberate decisions recorded:
+
+1. **Structured diffs, not unified-diff patching.** Diffs are canonical
+   JSON objects (parent ref, child ref, changed path→hash map, deleted
+   paths). Application is deterministic (no context matching or fuzz),
+   every step verifies against the declared child state, and unchanged
+   content deduplicates in the store. Textual diffs remain in evidence
+   bundles for human review only. This supersedes this plan's earlier
+   suggestion of unified diffs.
+2. **Protocol bug found and fixed:** frontier selection and dominance
+   compared per-block validated deltas, which are relative to each block's
+   own parent and therefore incomparable across generations — no child
+   could displace a parent with a larger delta. Both now compare
+   cumulative validated improvement from the domain seed
+   (`SimulatorState::cumulative_validated_delta`). Found by the first
+   two-generation run; the simulator-first discipline working as intended.
+
 **Goal:** make multi-generation research real. A proposer must be able to
 pull the canonical frontier of a domain — not just the genesis seed — as an
 assembled workspace, so block N+1 builds on block N's accepted state.
