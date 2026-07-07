@@ -104,6 +104,34 @@ pub struct SimulatorState {
     /// signature (enforced at the node boundary; set at init).
     #[serde(default)]
     pub require_signatures: bool,
+    /// Per-domain research bounty pools (funded domains only; see
+    /// docs/economics-design.md). Absent for unfunded legacy domains,
+    /// which fall back to the global `RewardConfig`.
+    #[serde(default)]
+    pub domain_pools: HashMap<DomainId, DomainPool>,
+}
+
+/// Reward-pool accounting for a funded domain.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DomainPool {
+    /// Spendable balance funding block rewards.
+    pub balance: TokenAmount,
+    /// Balance reserved for validation and adversarial work (spending
+    /// mechanics land in a later economics step; accounted separately
+    /// from day one so the split is auditable).
+    pub reserve_balance: TokenAmount,
+    /// Reward paid per accepted block, drawn from `balance`.
+    pub base_block_reward: TokenAmount,
+    /// Cumulative amount paid out of the pool.
+    pub spent: TokenAmount,
+}
+
+impl DomainPool {
+    /// A funded domain is dormant when its pool cannot cover one full
+    /// block reward. Dormancy is pure arithmetic — no discretion.
+    pub fn is_dormant(&self) -> bool {
+        self.balance.as_u64() < self.base_block_reward.as_u64()
+    }
 }
 
 impl SimulatorState {
@@ -132,6 +160,7 @@ impl SimulatorState {
             escrow_counter: 0,
             metric_directions: HashMap::new(),
             require_signatures: false,
+            domain_pools: HashMap::new(),
         }
     }
 
@@ -208,6 +237,37 @@ impl SimulatorState {
         let track_tree_id = activated.track_tree.id;
         let metric_direction = activated.domain_spec.metric_direction;
 
+        // Funded domain: initialize the reward pool from genesis fields
+        // (docs/economics-design.md). Unfunded (reward_pool == 0) domains
+        // fall back to the global RewardConfig with no pool accounting.
+        let genesis_block = &activation.genesis_block;
+        if genesis_block.reward_pool.as_u64() > 0 {
+            if genesis_block.base_block_reward.as_u64() == 0 {
+                return Err(format!(
+                    "genesis {}: funded domain requires base_block_reward > 0",
+                    genesis_id
+                ));
+            }
+            if genesis_block.validation_reserve_bps > 10_000 {
+                return Err(format!(
+                    "genesis {}: validation_reserve_bps exceeds 10000",
+                    genesis_id
+                ));
+            }
+            let pool = genesis_block.reward_pool.as_u64();
+            let reserve =
+                pool as u128 * genesis_block.validation_reserve_bps as u128 / 10_000;
+            self.domain_pools.insert(
+                domain_id,
+                DomainPool {
+                    balance: TokenAmount::new(pool - reserve as u64),
+                    reserve_balance: TokenAmount::new(reserve as u64),
+                    base_block_reward: genesis_block.base_block_reward,
+                    spent: TokenAmount::ZERO,
+                },
+            );
+        }
+
         self.domain_registry
             .register(activated.clone())
             .map_err(|e| e.to_string())?;
@@ -248,6 +308,22 @@ impl SimulatorState {
         // Check domain is active.
         if !self.domain_registry.is_active(&domain_id) {
             return Err(format!("domain {} is not active", domain_id));
+        }
+
+        // Dormancy gate: a funded domain whose pool cannot cover one full
+        // block reward refuses new submissions upfront (never leaves a
+        // miner unpaid after the fact). Purely arithmetic — top-ups lift
+        // it permissionlessly.
+        if let Some(pool) = self.domain_pools.get(&domain_id) {
+            if pool.is_dormant() {
+                return Err(format!(
+                    "domain {} is dormant: reward pool balance {} cannot cover \
+                     block reward {} (top up the pool to resume)",
+                    domain_id,
+                    pool.balance.as_u64(),
+                    pool.base_block_reward.as_u64()
+                ));
+            }
         }
 
         // Structural validation (caller's gate — done here, not in transition).
@@ -446,11 +522,32 @@ impl SimulatorState {
             validation_epoch: self.current_epoch,
         });
 
+        // Funded domains pay rewards from their bounty pool at the
+        // per-domain rate; unfunded (legacy/test) domains use the global
+        // config. The pool is debited at acceptance — and re-checked here,
+        // because multiple in-flight blocks can drain it between the
+        // submission-time dormancy gate and acceptance.
+        let mut effective_config = self.reward_config.clone();
+        if let Some(pool) = self.domain_pools.get(&block.domain_id) {
+            let reward = pool.base_block_reward.as_u64();
+            if pool.balance.as_u64() < reward {
+                return Err(format!(
+                    "cannot accept block {}: domain {} reward pool exhausted \
+                     (balance {}, reward {})",
+                    block.id,
+                    block.domain_id,
+                    pool.balance.as_u64(),
+                    reward
+                ));
+            }
+            effective_config.base_block_reward = reward;
+        }
+
         // Fraud-exposure invariant: the provisional reward tranche is paid
         // at acceptance and cannot be clawed back once released, so the
         // proposer's slashable bond must cover it. Otherwise fraud would be
         // net-positive even when caught.
-        let provisional_amount = self.reward_config.provisional_reward_amount();
+        let provisional_amount = effective_config.provisional_reward_amount();
         if block.bond.as_u64() < provisional_amount.as_u64() {
             return Err(format!(
                 "cannot accept block {}: bond {} does not cover the provisional \
@@ -463,6 +560,15 @@ impl SimulatorState {
 
         let proposer = ParticipantId::from_bytes(*block.proposer.as_bytes());
 
+        // All checks passed: debit the pool (funded domains only). Done
+        // after every fallible precondition so a rejected acceptance never
+        // spends pool funds.
+        if let Some(pool) = self.domain_pools.get_mut(&block.domain_id) {
+            let reward = pool.base_block_reward.as_u64();
+            pool.balance = TokenAmount::new(pool.balance.as_u64() - reward);
+            pool.spent = TokenAmount::new(pool.spent.as_u64() + reward);
+        }
+
         // Create escrow record for the proposer's bond.
         let bond_escrow_id = self.next_escrow_id();
         let escrow = arc_reward_engine::create_block_escrow(
@@ -471,7 +577,7 @@ impl SimulatorState {
             proposer,
             block.bond,
             self.current_epoch,
-            &self.reward_config,
+            &effective_config,
         );
         self.escrow_records.insert(bond_escrow_id, escrow);
 
@@ -487,7 +593,7 @@ impl SimulatorState {
             block.id,
             proposer,
             self.current_epoch,
-            &self.reward_config,
+            &effective_config,
         );
         arc_reward_engine::release_escrow(&mut provisional, self.current_epoch)
             .map_err(|e| e.to_string())?;
@@ -1134,6 +1240,31 @@ impl SimulatorState {
         self.challenge_escrows
             .get(challenge_id)
             .and_then(|eid| self.escrow_records.get(eid))
+    }
+
+    /// Permissionlessly top up a funded domain's reward pool. Anyone may
+    /// fund a domain; funds are spendable, never refundable.
+    pub fn top_up_pool(
+        &mut self,
+        domain_id: &DomainId,
+        amount: TokenAmount,
+    ) -> Result<(), String> {
+        if amount.as_u64() == 0 {
+            return Err("top-up amount must be positive".to_string());
+        }
+        let pool = self.domain_pools.get_mut(domain_id).ok_or_else(|| {
+            format!(
+                "domain {} has no reward pool (unfunded domains cannot be topped up)",
+                domain_id
+            )
+        })?;
+        pool.balance = TokenAmount::new(pool.balance.as_u64() + amount.as_u64());
+        Ok(())
+    }
+
+    /// Get the reward pool for a funded domain.
+    pub fn domain_pool(&self, domain_id: &DomainId) -> Option<&DomainPool> {
+        self.domain_pools.get(domain_id)
     }
 
     /// Get the slash distribution recorded for an upheld challenge.

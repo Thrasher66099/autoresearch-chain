@@ -1134,3 +1134,76 @@ fn test_sequencer_and_follower_end_to_end() {
     let _ = child.wait();
     let _ = fs::remove_dir_all(&dir);
 }
+
+// =======================================================================
+// Economics step 1: funded domains, dormancy, top-up over the CLI
+// =======================================================================
+
+#[test]
+fn test_funded_domain_pool_lifecycle() {
+    let dir = test_dir("pool_lifecycle");
+    let state = dir.join("state.json");
+    let state_str = state.to_str().unwrap();
+    run_node(&["init", state_str]);
+
+    // Funded genesis: pool 2500, 20% reserve, reward 1000 (2 blocks).
+    let mut genesis = genesis_json();
+    genesis["reward_pool"] = serde_json::json!(2500);
+    genesis["validation_reserve_bps"] = serde_json::json!(2000);
+    genesis["base_block_reward"] = serde_json::json!(1000);
+    let genesis_file = write_json(&dir, "genesis.json", &genesis);
+    let genesis_id = hex_id(1);
+    let domain_id = hex_id(1);
+    run_ok(&["--state", state_str, "submit-genesis", &genesis_file]);
+    run_ok(&["--state", state_str, "evaluate-conformance", &genesis_id]);
+    for i in 1..=3u8 {
+        let sv_file = write_json(&dir, &format!("sv_{}.json", i), &seed_validation_json(i));
+        run_ok(&["--state", state_str, "record-seed-validation", &genesis_id, &sv_file]);
+    }
+    run_ok(&["--state", state_str, "finalize-activation", &genesis_id]);
+    let pool_file = write_json(&dir, "pool.json", &validator_pool_json());
+    run_ok(&["--state", state_str, "register-validators", &pool_file]);
+
+    // Pool query reflects the reserve split.
+    let result = run_ok(&["--state", state_str, "show-pool", &domain_id]);
+    assert_eq!(result["balance"], 2000);
+    assert_eq!(result["reserve_balance"], 500);
+    assert_eq!(result["dormant"], false);
+
+    // Accept two blocks; the pool is exhausted and the domain dormant.
+    for n in [10u8, 11u8] {
+        let block_id = hex_id(n);
+        let block_file = write_json(
+            &dir,
+            &format!("block_{}.json", n),
+            &block_json(n, &genesis_id, &domain_id, 0.015),
+        );
+        run_ok(&["--state", state_str, "submit-block", &block_file]);
+        let assigned = run_ok(&["--state", state_str, "assign-validators", &block_id]);
+        for (idx, v) in assigned["assigned_validators"].as_array().unwrap().iter().enumerate() {
+            let att_file = write_json(
+                &dir,
+                &format!("att_{}_{}.json", n, idx),
+                &attestation_json(&block_id, v.as_str().unwrap(), 0.015),
+            );
+            run_ok(&["--state", state_str, "submit-attestation", &att_file]);
+        }
+        run_ok(&["--state", state_str, "evaluate-block", &block_id]);
+    }
+    let result = run_ok(&["--state", state_str, "show-pool", &domain_id]);
+    assert_eq!(result["balance"], 0);
+    assert_eq!(result["spent"], 2000);
+    assert_eq!(result["dormant"], true);
+
+    // Dormant domain refuses submissions.
+    let block_file = write_json(&dir, "block_12.json", &block_json(12, &genesis_id, &domain_id, 0.015));
+    let stderr = run_err(&["--state", state_str, "submit-block", &block_file]);
+    assert!(stderr.contains("dormant"), "stderr: {}", stderr);
+
+    // Top-up revives the domain.
+    let result = run_ok(&["--state", state_str, "top-up-pool", &domain_id, "1500"]);
+    assert_eq!(result["dormant"], false);
+    run_ok(&["--state", state_str, "submit-block", &block_file]);
+
+    let _ = fs::remove_dir_all(&dir);
+}

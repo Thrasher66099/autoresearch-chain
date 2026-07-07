@@ -125,8 +125,10 @@ default for unfunded test states only.
 
 ## Implementation order (feeds Milestone E4)
 
-1. Per-domain reward pools + dormancy (protocol core; replaces global
-   `base_block_reward` at acceptance/settlement).
+1. Per-domain reward pools + dormancy — **implemented** (`DomainPool`
+   in the simulator: reserve split at activation, debit at acceptance,
+   arithmetic dormancy gate at submission, permissionless
+   `top-up-pool`; unfunded domains keep legacy global-config behavior).
 2. Bond-at-submission + attestation slashing (closes calibration gaps).
 3. Proposer-fee distribution to assigned validators.
 4. Emissions subsidy accounting with matching + caps.
