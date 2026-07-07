@@ -91,7 +91,7 @@ This layer is off-chain but protocol-coupled.
 
 It should integrate naturally with autoresearch-style loops.
 
-**Status:** Proposer and validator runners are implemented and integrated with the Rust protocol core via the `arc-node` CLI. The `arc-runner` Python package provides content-addressed evidence bundling (BLAKE3, matching the Rust storage-model), a QMD domain-specific genesis packager with a protocol bridge function (`prepare_genesis`), and an autoresearch adapter with frozen/search surface enforcement. Evidence manifest storage enables validators to fetch and verify proposer evidence. The challenger runner remains structurally scaffolded. Canonical frontier pull is implemented for genesis-based workspaces.
+**Status:** Proposer and validator runners are implemented and integrated with the Rust protocol core via the `arc-node` CLI. The `arc-runner` Python package provides content-addressed evidence bundling (BLAKE3, matching the Rust storage-model), a QMD domain-specific genesis packager with a protocol bridge function (`prepare_genesis`), and an autoresearch adapter with frozen/search surface enforcement. Evidence manifest storage enables validators to fetch and verify proposer evidence. The challenger runner is implemented: it identifies suspect blocks, fetches their evidence, and opens bonded challenges; challenge adjudication (begin review, uphold, reject) is exposed through the `arc-node` CLI and exercised by a real-computation fraud-detection test in which a challenger's replay catches an inflated claimed score. Canonical frontier pull is implemented for genesis-based workspaces.
 
 ---
 
@@ -170,7 +170,7 @@ Phase 0 is substantially complete. The Rust workspace contains 10 crates (~10,60
 | `reward-engine` | Partial | Escrow create/release/slash implemented; staged rewards, attribution distribution deferred |
 | `simulator` | Implemented | Integrated state machine composing all engines; 51 scenario tests; whole-state snapshot persistence (serde JSON) |
 | `storage-model` | Partial | Content-addressed artifact store (BLAKE3), ArtifactStore trait, InMemoryArtifactStore, evidence bundling, file-from-disk ingestion; Python-Rust hash agreement verified; materialization triggers and frontier assembly not yet implemented |
-| `node` | Partial | Phase 1 target; file-based state persistence, CLI transaction submission (14 write commands), and state queries (5 read commands) implemented; event log / state-transition trace not yet implemented |
+| `node` | Partial | Phase 1 target; file-based state persistence, CLI transaction submission (17 write commands, including challenge adjudication), and state queries (5 read commands) implemented; event log / state-transition trace not yet implemented |
 | `cli` | Stub | Phase 1 target |
 
 ### Protocol-truth hardening
@@ -294,7 +294,7 @@ A single machine can host a functioning local version of the protocol and execut
 
 ## Phase 2 — Python Research Runner Integration
 
-**Status:** Substantially complete. Evidence bundle packaging with content-addressed hashing (BLAKE3) is implemented with verified Python-Rust hash agreement. A QMD domain-specific genesis packager exists with a protocol bridge function for identity field generation. The autoresearch adapter implements frozen/search surface enforcement and genesis-based frontier pull. Proposer and validator runners are implemented and connected to the Rust protocol core via the `arc-node` CLI — evidence manifest storage enables the proposer→validator evidence handoff. The challenger runner is scaffolded but not yet connected.
+**Status:** Substantially complete. Evidence bundle packaging with content-addressed hashing (BLAKE3) is implemented with verified Python-Rust hash agreement. A QMD domain-specific genesis packager exists with a protocol bridge function for identity field generation. The autoresearch adapter implements frozen/search surface enforcement and genesis-based frontier pull. Proposer, validator, and challenger runners are implemented and connected to the Rust protocol core via the `arc-node` CLI — evidence manifest storage enables the proposer→validator evidence handoff, and the challenge lifecycle (open → review → upheld/rejected) is exercised end-to-end including a real-computation fraud-detection scenario.
 
 ### Goal
 
@@ -304,7 +304,7 @@ Connect real useful-work loops to the protocol.
 
 - proposer runner — **done** (submits blocks via `arc-node` CLI, stores evidence manifest as retrievable artifact)
 - validator runner — **done** (fetches and parses evidence manifests, verifies individual artifact availability, submits attestations)
-- challenger runner — scaffolded
+- challenger runner — **done** (finds suspect blocks, fetches evidence, opens bonded challenges; adjudication via `arc-node` begin-review/uphold-challenge/reject-challenge)
 - evidence bundle packager — **done** (BLAKE3 content-addressed hashing, Python-Rust hash agreement verified, JSON manifest storage for proposer→validator handoff)
 - domain experiment wrappers — **partial** (QMD query-expansion genesis packager implemented, protocol bridge function `prepare_genesis` adds identity fields)
 - canonical frontier pull helper — **partial** (genesis-based workspace extraction implemented; diff-chain materialization deferred)
@@ -486,7 +486,7 @@ The `arc-runner` package (`python/arc_runner/`) is partially implemented:
   - validator replay runner (implemented; evidence manifest fetch/parse, attestation submission via arc-node CLI)
 
 - `python/arc_runner/challenger/`
-  - challenger replay/audit runner (scaffolded)
+  - challenger replay/audit runner (implemented; suspect block discovery, evidence fetch, bonded challenge submission via arc-node CLI)
 
 - `python/arc_runner/autoresearch_adapter/`
   - integration with autoresearch-style loops; frozen/search surface enforcement implemented
@@ -547,7 +547,7 @@ The frontier types exist (`CanonicalFrontierState`, `MaterializedState`, `Codeba
 
 The chain becomes real only when it can actually receive useful work from autonomous agent loops and replay workers.
 
-The `arc-runner` Python package provides: content-addressed evidence bundling (BLAKE3, Python-Rust hash agreement verified), a QMD domain-specific genesis packager with a protocol bridge function, an autoresearch adapter with frozen/search surface enforcement and frontier pull, and proposer and validator runners connected to the Rust protocol core via the `arc-node` CLI. Evidence manifest storage enables the proposer→validator evidence handoff. End-to-end integration tests exercise the full pipeline: packager → genesis submission → adapter → proposer → validator evidence fetch → attestation → evaluation. The challenger runner remains scaffolded.
+The `arc-runner` Python package provides: content-addressed evidence bundling (BLAKE3, Python-Rust hash agreement verified), a QMD domain-specific genesis packager with a protocol bridge function, an autoresearch adapter with frozen/search surface enforcement and frontier pull, and proposer, validator, and challenger runners connected to the Rust protocol core via the `arc-node` CLI. Evidence manifest storage enables the proposer→validator evidence handoff. End-to-end integration tests exercise the full pipeline: packager → genesis submission → adapter → proposer → validator evidence fetch → attestation → evaluation → challenge adjudication, including a real-computation fraud scenario where a challenger's independent replay detects an inflated claimed score and the upheld challenge invalidates the block, slashes escrow, and reverts the frontier.
 
 ---
 
