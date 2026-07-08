@@ -25,6 +25,7 @@ resolution.
 | `arc_runner/domains/` | Domain-specific experiment wrappers — QMD genesis packaging and training/eval/replay engine |
 | `arc_runner/evidence/` | Content-addressed (BLAKE3) evidence bundle creation, matching the Rust storage model |
 | `arc_runner/identity/` | Ed25519 identity: participant ID = public key, deterministic signing messages matching `crates/identity`, payload signing |
+| `arc_runner/http_client.py` | `HttpArcClient` — same protocol surface over HTTP against a networked `arc-node serve` sequencer, plus content-addressed artifact get/put |
 | `arc_runner/materialize/` | Materialized state snapshots (content-addressed manifests), structured state diffs, verified assembly, diff-chain resolution |
 | `arc_runner/demo.py` | End-to-end lifecycle demo with real computation (requires a built `arc-node`) |
 
