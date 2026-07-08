@@ -115,6 +115,7 @@ pub fn validate_challenge_target(
                 }),
             }
         }
+        ChallengeTarget::EvaluationSurface { .. } => Ok(()), // domain checks live in the caller
         ChallengeTarget::Attestation { block_id, .. } => {
             match block_status_lookup(block_id) {
                 Some(BlockStatus::UnderChallenge) => Ok(()),

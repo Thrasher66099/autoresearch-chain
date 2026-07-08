@@ -2522,3 +2522,89 @@ fn scenario_ak_subsidy_respects_caps_halving_and_legacy() {
     settle_funded_block(&mut sim, 10, genesis_id, domain_id);
     assert!(sim.subsidy_payouts.is_empty());
 }
+
+// =======================================================================
+// Scenario AL: evaluation-surface challenge (attack-model §18)
+// =======================================================================
+
+#[test]
+fn scenario_al_upheld_eval_surface_challenge_deprecates_domain() {
+    let (mut sim, domain_id, genesis_id) = setup_funded_domain();
+
+    // One accepted-but-unsettled block sits in the challenge window.
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    let block_id = block.id;
+    submit_and_validate(&mut sim, block);
+
+    // A challenger demonstrates the degenerate surface.
+    let challenge_id = test_challenge_id(9);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::MetricAdequacy,
+        ChallengeTarget::EvaluationSurface { domain_id },
+        test_participant_id(5),
+        TokenAmount::new(500),
+        test_artifact_hash(90), // the demonstration generator
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.uphold_challenge(&challenge_id).unwrap();
+
+    // Domain deprecated: no new blocks, ever.
+    let block2 = make_block(11, genesis_id.as_block_id(), domain_id, 0.015);
+    let err = sim.submit_block(block2).unwrap_err();
+    assert!(err.contains("deprecated"), "got: {}", err);
+
+    // Unsettled block unwinds: bond returned, tranches cancelled.
+    let escrows = sim.block_escrow_records(&block_id);
+    for e in &escrows {
+        match e.kind {
+            EscrowKind::ProposerBond => assert_eq!(e.status, EscrowStatus::Released),
+            EscrowKind::SurvivalReward => assert_eq!(e.status, EscrowStatus::Slashed),
+            EscrowKind::ProvisionalReward => assert_eq!(e.status, EscrowStatus::Released),
+            _ => {}
+        }
+    }
+
+    // Remaining pool burned (2000 spendable - 1000 spent + 500 reserve
+    // = 1500 remaining), plus the seed bond (1000) slashed; challenger
+    // paid 50% of the total; the challenger's own bond came back.
+    let pool = sim.domain_pool(&domain_id).unwrap();
+    assert_eq!(pool.balance, TokenAmount::ZERO);
+    assert_eq!(pool.reserve_balance, TokenAmount::ZERO);
+    let dist = sim.slash_distribution(&challenge_id).unwrap();
+    assert_eq!(dist.slashed_amount, TokenAmount::new(2500));
+    assert_eq!(dist.challenger_payout, TokenAmount::new(1250));
+    assert_eq!(
+        sim.challenge_escrow(&challenge_id).unwrap().status,
+        EscrowStatus::Released
+    );
+
+    // Settled history is untouched: the accepted block's status stands.
+    assert_eq!(sim.derived_validity(&block_id), DerivedValidity::DirectValid);
+}
+
+#[test]
+fn scenario_al_rejected_eval_surface_challenge_forfeits_bond() {
+    let (mut sim, domain_id, genesis_id) = setup_funded_domain();
+    let challenge_id = test_challenge_id(9);
+    sim.open_challenge(
+        challenge_id,
+        ChallengeType::MetricAdequacy,
+        ChallengeTarget::EvaluationSurface { domain_id },
+        test_participant_id(5),
+        TokenAmount::new(500),
+        test_artifact_hash(90),
+    )
+    .unwrap();
+    sim.begin_challenge_review(&challenge_id).unwrap();
+    sim.reject_challenge(&challenge_id).unwrap();
+
+    assert_eq!(
+        sim.challenge_escrow(&challenge_id).unwrap().status,
+        EscrowStatus::Slashed
+    );
+    // Domain unaffected.
+    let block = make_block(10, genesis_id.as_block_id(), domain_id, 0.015);
+    submit_and_validate(&mut sim, block);
+}

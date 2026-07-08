@@ -295,7 +295,7 @@ This is the core truth-seeking mechanism. The system relies on the economic ince
 
 ### Evaluation-Surface Challenges
 
-**Status: specified, not implemented.** Addresses attack-model §18
+**Status: state machine implemented in the protocol core (deprecation consequences, escrow unwind, pool burn, challenger payout); off-chain generator replay is runner-side work.** Addresses attack-model §18
 (degenerate evaluation surface): a domain whose metric can be inflated
 without genuine research work.
 

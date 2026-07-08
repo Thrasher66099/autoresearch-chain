@@ -52,6 +52,12 @@ pub enum ChallengeTarget {
         block_id: BlockId,
         claimant: ParticipantId,
     },
+    /// A domain's evaluation surface itself (attack-model §18). The
+    /// challenge's `evidence_ref` carries the budget-bounded
+    /// demonstration generator; upheld means the domain is Deprecated.
+    EvaluationSurface {
+        domain_id: crate::ids::DomainId,
+    },
     /// A fork dominance decision within a fork family.
     DominanceDecision {
         fork_family_id: ForkFamilyId,

@@ -226,7 +226,7 @@ pub fn apply_tx(
                 .get("target")
                 .and_then(|t| t.as_object())
                 .and_then(|o| o.values().next())
-                .and_then(|inner| inner.get("block_id"))
+                .and_then(|inner| inner.get("block_id").or_else(|| inner.get("domain_id")))
                 .and_then(|b| b.as_str())
                 .unwrap_or("");
             let message = arc_identity::challenge_message(
