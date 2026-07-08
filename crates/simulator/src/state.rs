@@ -116,6 +116,10 @@ pub struct SimulatorState {
     /// Proposer-fee shares paid to attesting validators.
     #[serde(default)]
     pub fee_payouts: Vec<FeePayout>,
+    /// Domains deprecated by upheld evaluation-surface challenges (§18).
+    /// Settled history is preserved; new submissions are refused.
+    #[serde(default)]
+    pub deprecated_domains: std::collections::HashSet<DomainId>,
     /// Emissions-subsidy mint records (bounty-matching, capped).
     #[serde(default)]
     pub subsidy_payouts: Vec<SubsidyPayout>,
@@ -180,6 +184,7 @@ impl SimulatorState {
             domain_pools: HashMap::new(),
             validator_bond_escrows: HashMap::new(),
             fee_payouts: Vec::new(),
+            deprecated_domains: std::collections::HashSet::new(),
             subsidy_payouts: Vec::new(),
             subsidy_minted_total: 0,
             subsidy_minted_this_epoch: 0,
@@ -354,6 +359,14 @@ impl SimulatorState {
         // Check domain is active.
         if !self.domain_registry.is_active(&domain_id) {
             return Err(format!("domain {} is not active", domain_id));
+        }
+
+        // Deprecated domains (§18) accept no new blocks, ever.
+        if self.deprecated_domains.contains(&domain_id) {
+            return Err(format!(
+                "domain {} is deprecated (upheld evaluation-surface challenge)",
+                domain_id
+            ));
         }
 
         // Dormancy gate: a funded domain whose pool cannot cover one full
@@ -979,6 +992,7 @@ impl SimulatorState {
             ChallengeTarget::Attestation { block_id, .. } => Some(*block_id),
             ChallengeTarget::Attribution { block_id, .. } => Some(*block_id),
             ChallengeTarget::DominanceDecision { .. } => None,
+            ChallengeTarget::EvaluationSurface { .. } => None,
         }
     }
 
@@ -1048,9 +1062,72 @@ impl SimulatorState {
             ChallengeTarget::Attestation { validator, .. } => Some(*validator),
             _ => None,
         };
+        let eval_surface_domain = match &challenge.target {
+            ChallengeTarget::EvaluationSurface { domain_id } => Some(*domain_id),
+            _ => None,
+        };
 
         // The challenge succeeded: return the challenger's bond.
         self.resolve_challenge_escrow(challenge_id, false)?;
+
+        // Evaluation-surface challenges (§18): the domain is Deprecated —
+        // no new blocks; unsettled proposer bonds returned; unreleased
+        // reward tranches cancelled (burned — the metric they were earned
+        // against does not measure research); the remaining pool burned;
+        // the creator's seed bond slashed with the challenger share.
+        // Settled history is preserved.
+        if let Some(domain_id) = eval_surface_domain {
+            if !self.domain_registry.is_active(&domain_id) {
+                return Err(format!("domain {} is not active", domain_id));
+            }
+            self.deprecated_domains.insert(domain_id);
+
+            for (bid, ids) in self.block_escrows.clone() {
+                if self.blocks.get(&bid).map(|b| b.domain_id) != Some(domain_id) {
+                    continue;
+                }
+                for id in ids {
+                    if let Some(escrow) = self.escrow_records.get_mut(&id) {
+                        if escrow.status == EscrowStatus::Held {
+                            escrow.status = match escrow.kind {
+                                EscrowKind::ProposerBond => EscrowStatus::Released,
+                                _ => EscrowStatus::Slashed,
+                            };
+                        }
+                    }
+                }
+            }
+
+            let mut burned_pool = 0u64;
+            if let Some(pool) = self.domain_pools.get_mut(&domain_id) {
+                burned_pool = pool.balance.as_u64() + pool.reserve_balance.as_u64();
+                pool.balance = TokenAmount::ZERO;
+                pool.reserve_balance = TokenAmount::ZERO;
+            }
+
+            let seed_bond = self
+                .pending_activations
+                .values()
+                .find(|a| a.genesis_block.domain_id == domain_id)
+                .map(|a| a.genesis_block.seed_bond.as_u64())
+                .unwrap_or(0);
+            let slashed = TokenAmount::new(seed_bond + burned_pool);
+            let (challenger_payout, burned) =
+                arc_reward_engine::compute_slash_distribution(slashed, &self.reward_config);
+            self.slash_distributions.insert(
+                *challenge_id,
+                SlashDistribution {
+                    challenge_id: *challenge_id,
+                    block_id: BlockId::from_bytes([0u8; 32]),
+                    slashed_amount: slashed,
+                    challenger,
+                    challenger_payout,
+                    burned,
+                    epoch: self.current_epoch,
+                },
+            );
+            return Ok(());
+        }
 
         // Attestation challenges slash the attesting validator's
         // registration bond — not the block. A dishonest attestation is

@@ -637,7 +637,7 @@ pub fn cmd_open_challenge(state_path: &Path, args: &[String]) {
         .get("target")
         .and_then(|t| t.as_object())
         .and_then(|o| o.values().next())
-        .and_then(|inner| inner.get("block_id"))
+        .and_then(|inner| inner.get("block_id").or_else(|| inner.get("domain_id")))
         .and_then(|b| b.as_str())
         .unwrap_or("")
         .to_string();
