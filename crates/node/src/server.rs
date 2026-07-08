@@ -140,6 +140,98 @@ pub fn serve(config: ServeConfig, max_requests: Option<usize>) -> Result<(), Str
             (tiny_http::Method::Get, ["state"]) => {
                 respond_json(req, 200, &serde_json::to_value(&sim).unwrap());
             }
+            // Read endpoints mirroring the CLI queries, so remote runners
+            // never need the whole state dump.
+            (tiny_http::Method::Get, ["block", hex]) => {
+                match parse_id32(hex).map(arc_protocol_types::BlockId::from_bytes) {
+                    Err(e) => err_json(req, 400, &e),
+                    Ok(id) => match sim.blocks.get(&id) {
+                        None => err_json(req, 404, "block not found"),
+                        Some(block) => {
+                            let mut result = serde_json::json!({
+                                "block": block,
+                                "derived_validity": format!("{:?}", sim.derived_validity(&id)),
+                            });
+                            if let Some(escrow) = sim.block_escrow(&id) {
+                                result["escrow"] = serde_json::to_value(escrow).unwrap();
+                            }
+                            let escrows = sim.block_escrow_records(&id);
+                            if !escrows.is_empty() {
+                                result["escrows"] = serde_json::to_value(&escrows).unwrap();
+                            }
+                            if let Some(outcome) = sim.validated_outcome(&id) {
+                                result["validated_outcome"] =
+                                    serde_json::to_value(outcome).unwrap();
+                            }
+                            respond_json(req, 200, &result);
+                        }
+                    },
+                }
+            }
+            (tiny_http::Method::Get, ["frontier", hex]) => {
+                match parse_id32(hex).map(arc_protocol_types::DomainId::from_bytes) {
+                    Err(e) => err_json(req, 400, &e),
+                    Ok(id) => respond_json(
+                        req,
+                        200,
+                        &serde_json::json!({
+                            "domain_id": id,
+                            "canonical_frontier": sim.canonical_frontier(&id),
+                        }),
+                    ),
+                }
+            }
+            (tiny_http::Method::Get, ["challenge", hex]) => {
+                match parse_id32(hex).map(arc_protocol_types::ChallengeId::from_bytes) {
+                    Err(e) => err_json(req, 400, &e),
+                    Ok(id) => match sim.challenges.get(&id) {
+                        None => err_json(req, 404, "challenge not found"),
+                        Some(challenge) => {
+                            let mut result = serde_json::to_value(challenge).unwrap();
+                            if let Some(escrow) = sim.challenge_escrow(&id) {
+                                result["challenger_escrow"] =
+                                    serde_json::to_value(escrow).unwrap();
+                            }
+                            if let Some(dist) = sim.slash_distribution(&id) {
+                                result["slash_distribution"] =
+                                    serde_json::to_value(dist).unwrap();
+                            }
+                            respond_json(req, 200, &result);
+                        }
+                    },
+                }
+            }
+            (tiny_http::Method::Get, ["blocks"]) => {
+                let blocks: Vec<_> = sim.blocks.values().collect();
+                respond_json(
+                    req,
+                    200,
+                    &serde_json::json!({
+                        "block_count": blocks.len(),
+                        "blocks": blocks,
+                    }),
+                );
+            }
+            (tiny_http::Method::Get, ["pool", hex]) => {
+                match parse_id32(hex).map(arc_protocol_types::DomainId::from_bytes) {
+                    Err(e) => err_json(req, 400, &e),
+                    Ok(id) => match sim.domain_pool(&id) {
+                        None => err_json(req, 404, "domain has no reward pool"),
+                        Some(pool) => respond_json(
+                            req,
+                            200,
+                            &serde_json::json!({
+                                "domain_id": id,
+                                "balance": pool.balance,
+                                "reserve_balance": pool.reserve_balance,
+                                "base_block_reward": pool.base_block_reward,
+                                "spent": pool.spent,
+                                "dormant": pool.is_dormant(),
+                            }),
+                        ),
+                    },
+                }
+            }
             (tiny_http::Method::Get, ["status"]) => {
                 respond_json(
                     req,
@@ -193,6 +285,19 @@ pub fn serve(config: ServeConfig, max_requests: Option<usize>) -> Result<(), Str
         }
     }
     Ok(())
+}
+
+/// Parse a 64-char hex ID into 32 bytes.
+fn parse_id32(hex: &str) -> Result<[u8; 32], String> {
+    if hex.len() != 64 {
+        return Err(format!("expected 64 hex characters, got {}", hex.len()));
+    }
+    let mut bytes = [0u8; 32];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .map_err(|e| format!("invalid hex: {}", e))?;
+    }
+    Ok(bytes)
 }
 
 /// Read a stored artifact, verifying content-addressing on the way out.
