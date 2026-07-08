@@ -354,8 +354,9 @@ Deliverables:
   undetectably, or fabricate actor signatures. libp2p/gossip and
   permissionless ordering are deliberately deferred; the transaction and
   state model do not change when the ordering layer is replaced.
-  Follow-ups: Python HTTP client, follower serving read endpoints,
-  sequencer rotation.
+  Follow-ups: Python HTTP client — **done** (`HttpArcClient`, full
+  signed lifecycle over HTTP with sequencer read endpoints and artifact
+  transfer); follower read endpoints and sequencer rotation remain.
 
 - **E2 — Ordering layer (original goal):** the useful-work game does not order the chain; a
   deliberately boring mechanism does. Start with the simplest thing that is
